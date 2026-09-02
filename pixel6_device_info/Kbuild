@@ -1,0 +1,16 @@
+# Copyright (c) 2025-2026 fei_cong(https://github.com/feicong/feicong-course)
+MODULE_NAME := cdh_pixel6_device_info
+$(MODULE_NAME)-objs := \
+	core/main.o \
+	cpu/cpu_display.o \
+	cpu/topology.o \
+	cpu/midr_sysfs.o \
+	cpu/cache_sysfs.o \
+	cpu/cpufreq_sysfs.o \
+	meminfo/meminfo.o \
+	time/uptime.o \
+	uts/uts.o
+
+obj-m += $(MODULE_NAME).o
+
+ccflags-y += -I$(src)/include

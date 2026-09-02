@@ -1,0 +1,4 @@
+version=android15-6.6
+mode=docker
+source=github
+slim=true

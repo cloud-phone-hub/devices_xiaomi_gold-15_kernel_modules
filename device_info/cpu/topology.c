@@ -2,15 +2,15 @@
 /*
  * Copyright (c) 2025-2026 fei_cong(https://github.com/feicong/feicong-course)
  */
-#define pr_fmt(fmt) "cdh_pixel6_device_info_topology: " fmt
+#define pr_fmt(fmt) "cdh_device_info_topology: " fmt
 
 #include <linux/arch_topology.h>
 #include <linux/cpumask.h>
 #include <linux/kernel.h>
 
-#include "cdh_pixel6_device_info.h"
+#include "cdh_device_info.h"
 
-struct cdh_pixel6_topology_saved {
+struct cdh_topology_saved {
 	int thread_id;
 	int core_id;
 	int cluster_id;
@@ -21,13 +21,13 @@ struct cdh_pixel6_topology_saved {
 	cpumask_t llc_sibling;
 };
 
-/* 卸载时恢复原始 topology，避免调试 rmmod 后把 guest 内核拓扑永久留在 Pixel6 画像。 */
-static struct cdh_pixel6_topology_saved cdh_pixel6_saved_topology[8];
-static bool cdh_pixel6_topology_registered;
+/* 卸载时恢复原始 topology，避免调试 rmmod 后把 guest 内核拓扑永久留在  画像。 */
+static struct cdh_topology_saved cdh_saved_topology[8];
+static bool cdh_topology_registered;
 
-static void cdh_pixel6_save_cpu_topology(unsigned int cpu)
+static void cdh_save_cpu_topology(unsigned int cpu)
 {
-	struct cdh_pixel6_topology_saved *saved = &cdh_pixel6_saved_topology[cpu];
+	struct cdh_topology_saved *saved = &cdh_saved_topology[cpu];
 
 	saved->thread_id = cpu_topology[cpu].thread_id;
 	saved->core_id = cpu_topology[cpu].core_id;
@@ -39,9 +39,9 @@ static void cdh_pixel6_save_cpu_topology(unsigned int cpu)
 	cpumask_copy(&saved->llc_sibling, &cpu_topology[cpu].llc_sibling);
 }
 
-static void cdh_pixel6_restore_cpu_topology(unsigned int cpu)
+static void cdh_restore_cpu_topology(unsigned int cpu)
 {
-	const struct cdh_pixel6_topology_saved *saved = &cdh_pixel6_saved_topology[cpu];
+	const struct cdh_topology_saved *saved = &cdh_saved_topology[cpu];
 
 	cpu_topology[cpu].thread_id = saved->thread_id;
 	cpu_topology[cpu].core_id = saved->core_id;
@@ -53,7 +53,7 @@ static void cdh_pixel6_restore_cpu_topology(unsigned int cpu)
 	cpumask_copy(&cpu_topology[cpu].llc_sibling, &saved->llc_sibling);
 }
 
-static void cdh_pixel6_set_cluster_mask(cpumask_t *mask, unsigned int first, unsigned int last)
+static void cdh_set_cluster_mask(cpumask_t *mask, unsigned int first, unsigned int last)
 {
 	unsigned int cpu;
 
@@ -62,46 +62,50 @@ static void cdh_pixel6_set_cluster_mask(cpumask_t *mask, unsigned int first, uns
 		cpumask_set_cpu(cpu, mask);
 }
 
-static void cdh_pixel6_apply_cpu_topology(unsigned int cpu)
+static void cdh_apply_cpu_topology(unsigned int cpu)
 {
 	/*
 	 * topology sysfs 文件直接读 cpu_topology[]，因此修改这份 canonical
 	 * source 能同时覆盖 physical_package_id、cluster_id 和 sibling mask。
-	 * Pixel6 Android15 的 core_siblings 和 cluster_cpus 对所有 CPU 都是
-	 * ff/0-7；4+2+2 分组只属于 cpufreq policy，不是 topology sibling。
+	 * Redmi Note 13 5G (MT6833) 真机：cpu0-5 同簇(cluster 0)、cpu6-7 同簇
+	 * (cluster 1)；core_siblings=ff、cluster_cpus=3f/c0、LLC(L2)=ff；
+	 * core_id 按簇内从 0 编号（cpu6-7 为 0/1）。
 	 */
 	cpu_topology[cpu].package_id = 0;
-	cpu_topology[cpu].cluster_id = 0;
-	cpu_topology[cpu].core_id = (int)cpu;
+	cpu_topology[cpu].cluster_id = (cpu < 6) ? 0 : 1;
+	cpu_topology[cpu].core_id = (cpu < 6) ? (int)cpu : (int)(cpu - 6);
 	cpu_topology[cpu].thread_id = -1;
 	cpumask_clear(&cpu_topology[cpu].thread_sibling);
 	cpumask_set_cpu(cpu, &cpu_topology[cpu].thread_sibling);
-	cdh_pixel6_set_cluster_mask(&cpu_topology[cpu].core_sibling, 0, 7);
-	cdh_pixel6_set_cluster_mask(&cpu_topology[cpu].cluster_sibling, 0, 7);
-	cdh_pixel6_set_cluster_mask(&cpu_topology[cpu].llc_sibling, 0, 7);
+	cdh_set_cluster_mask(&cpu_topology[cpu].core_sibling, 0, 7);
+	if (cpu < 6)
+		cdh_set_cluster_mask(&cpu_topology[cpu].cluster_sibling, 0, 5);
+	else
+		cdh_set_cluster_mask(&cpu_topology[cpu].cluster_sibling, 6, 7);
+	cdh_set_cluster_mask(&cpu_topology[cpu].llc_sibling, 0, 7);
 }
 
-int cdh_pixel6_cpu_topology_init(void)
+int cdh_cpu_topology_init(void)
 {
 	unsigned int cpu;
 
-	for (cpu = 0; cpu < ARRAY_SIZE(cdh_pixel6_saved_topology); cpu++) {
-		cdh_pixel6_save_cpu_topology(cpu);
-		cdh_pixel6_apply_cpu_topology(cpu);
+	for (cpu = 0; cpu < ARRAY_SIZE(cdh_saved_topology); cpu++) {
+		cdh_save_cpu_topology(cpu);
+		cdh_apply_cpu_topology(cpu);
 	}
-	cdh_pixel6_topology_registered = true;
-	pr_info("updated cpu_topology for Pixel6 package and cluster ids\n");
+	cdh_topology_registered = true;
+	pr_info("updated cpu_topology for  package and cluster ids\n");
 	return 0;
 }
 
-void cdh_pixel6_cpu_topology_exit(void)
+void cdh_cpu_topology_exit(void)
 {
 	unsigned int cpu;
 
-	if (!cdh_pixel6_topology_registered)
+	if (!cdh_topology_registered)
 		return;
-	for (cpu = 0; cpu < ARRAY_SIZE(cdh_pixel6_saved_topology); cpu++)
-		cdh_pixel6_restore_cpu_topology(cpu);
-	cdh_pixel6_topology_registered = false;
+	for (cpu = 0; cpu < ARRAY_SIZE(cdh_saved_topology); cpu++)
+		cdh_restore_cpu_topology(cpu);
+	cdh_topology_registered = false;
 	pr_info("restored cpu_topology values\n");
 }

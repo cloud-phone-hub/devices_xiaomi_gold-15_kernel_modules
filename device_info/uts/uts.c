@@ -2,18 +2,18 @@
 /*
  * Copyright (c) 2025-2026 fei_cong(https://github.com/feicong/feicong-course)
  */
-#define pr_fmt(fmt) "cdh_pixel6_device_info: uts: " fmt
+#define pr_fmt(fmt) "cdh_device_info: uts: " fmt
 
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/utsname.h>
 
-#include "cdh_pixel6_device_info.h"
+#include "cdh_device_info.h"
 
 #define CDH_UNAME_SYSNAME "Linux"
 #define CDH_UNAME_NODENAME "localhost"
-#define CDH_UNAME_RELEASE "6.1.99-android14-11-gd7dac4b14270-ab12946699"
-#define CDH_UNAME_VERSION "#1 SMP PREEMPT Tue Jan 21 13:39:43 UTC 2025"
+#define CDH_UNAME_RELEASE "6.6.89-android15-8-gbe8d201b0d27-ab13762941-4k"
+#define CDH_UNAME_VERSION "#1 SMP PREEMPT Thu Jul 10 06:35:14 UTC 2025"
 #define CDH_UNAME_MACHINE "aarch64"
 #define CDH_UNAME_DOMAINNAME "(none)"
 
@@ -35,7 +35,7 @@ static void cdh_patch_utsname(struct new_utsname *uts)
 	cdh_set_uts_field(uts->domainname, CDH_UNAME_DOMAINNAME);
 }
 
-int cdh_pixel6_uts_init(void)
+int cdh_uts_init(void)
 {
 	cdh_original_uts = init_uts_ns.name;
 	cdh_original_uts_saved = true;
@@ -46,7 +46,7 @@ int cdh_pixel6_uts_init(void)
 	return 0;
 }
 
-void cdh_pixel6_uts_exit(void)
+void cdh_uts_exit(void)
 {
 	if (cdh_original_uts_saved)
 		init_uts_ns.name = cdh_original_uts;

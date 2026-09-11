@@ -72,7 +72,7 @@ static int __init cdh_goodix_init(void) {
     return ret;
   }
 
-  pr_info("cdh_pixel6_goodix_fingerprint: registered %s and %s\n",
+  pr_info("cdh_goodix_fingerprint: registered %s and %s\n",
           CDH_GOODIX_DRIVER_NAME, CDH_GOODIX_INPUT_NAME);
   return 0;
 }
@@ -80,7 +80,7 @@ static int __init cdh_goodix_init(void) {
 static void __exit cdh_goodix_exit(void) {
   cdh_goodix_unregister_input();
   platform_driver_unregister(&cdh_goodix_platform_driver);
-  pr_info("cdh_pixel6_goodix_fingerprint: removed\n");
+  pr_info("cdh_goodix_fingerprint: removed\n");
 }
 
 module_init(cdh_goodix_init);
@@ -88,5 +88,5 @@ module_exit(cdh_goodix_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("fei_cong <fei_cong@hotmail.com>");
-MODULE_DESCRIPTION("Read-only Pixel6 Android15 Goodix fingerprint sysfs/input "
+MODULE_DESCRIPTION("Read-only  Android15 Goodix fingerprint sysfs/input "
                    "enumerator for CDH");

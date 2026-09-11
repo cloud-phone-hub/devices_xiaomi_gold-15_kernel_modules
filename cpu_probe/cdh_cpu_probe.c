@@ -6,26 +6,24 @@
 #include <linux/seq_file.h>
 #include <linux/sysfs.h>
 
-#define CDH_CPU_PROC_NAME "cdh_pixel6_cpu_profile"
-#define CDH_CPU_PROC_PATH "/proc/cdh_pixel6_cpu_profile"
-#define CDH_CPU_SYSFS_NAME "cdh_pixel6_cpu"
-#define CDH_CPU_SYSFS_PATH "/sys/kernel/cdh_pixel6_cpu"
+#define CDH_CPU_PROC_NAME "cdh_cpu_profile"
+#define CDH_CPU_PROC_PATH "/proc/cdh_cpu_profile"
+#define CDH_CPU_SYSFS_NAME "cdh_cpu"
+#define CDH_CPU_SYSFS_PATH "/sys/kernel/cdh_cpu"
 
 static struct proc_dir_entry *cdh_cpu_proc;
 static struct kobject *cdh_cpu_kobj;
 
 static const char cdh_cpu_profile[] =
-	"device=pixel6-15\n"
+	"device=note13-5g-15\n"
 	"android=15\n"
-	"source=Pixel6 Android15 BP1A.250505.005 real device\n"
+	"source= Redmi Note 13 5G (gold) OS3.0.9.0.VNQCNXM real device\n"
 	"features=fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp\n"
-	"cluster0=cpu0-3 cortex-a55 capacity=160 min=300000 max=1803000 midr=0x00000000412fd050\n"
-	"cluster1=cpu4-5 cortex-a76 capacity=498 min=400000 max=2253000 midr=0x00000000414fd0b0\n"
-	"cluster2=cpu6-7 cortex-x1 capacity=1024 min=500000 max=2802000 midr=0x00000000411fd440\n";
+	"cluster0=cpu0-5 cortex-a55 capacity=356 min=500000 max=2000000 midr=0x00000000412fd050\n"
+	"cluster1=cpu6-7 cortex-a76 capacity=1024 min=725000 max=2400000 midr=0x00000000414fd0b0\n";
 
 static const char cdh_cpu_clusters[] =
-	"cpu0-3 affected=0 1 2 3 related=0 1 2 3 capacity=160\n"
-	"cpu4-5 affected=4 5 related=4 5 capacity=498\n"
+	"cpu0-5 affected=0 1 2 3 4 5 related=0 1 2 3 4 5 capacity=356\n"
 	"cpu6-7 affected=6 7 related=6 7 capacity=1024\n";
 
 static const char cdh_cpu_midr_el1[] =
@@ -33,15 +31,14 @@ static const char cdh_cpu_midr_el1[] =
 	"cpu1=0x00000000412fd050\n"
 	"cpu2=0x00000000412fd050\n"
 	"cpu3=0x00000000412fd050\n"
-	"cpu4=0x00000000414fd0b0\n"
-	"cpu5=0x00000000414fd0b0\n"
-	"cpu6=0x00000000411fd440\n"
-	"cpu7=0x00000000411fd440\n";
+	"cpu4=0x00000000412fd050\n"
+	"cpu5=0x00000000412fd050\n"
+	"cpu6=0x00000000414fd0b0\n"
+	"cpu7=0x00000000414fd0b0\n";
 
 static const char cdh_cpu_cpufreq[] =
-	"cpu0-3 governor=sched_pixel min=300000 max=1803000 cur=1803000\n"
-	"cpu4-5 governor=sched_pixel min=400000 max=2253000 cur=2253000\n"
-	"cpu6-7 governor=sched_pixel min=500000 max=2802000 cur=2802000\n";
+	"cpu0-5 governor=schedutil min=500000 max=2000000 cur=2000000\n"
+	"cpu6-7 governor=schedutil min=725000 max=2400000 cur=2400000\n";
 
 static int cdh_cpu_proc_show(struct seq_file *m, void *v)
 {
@@ -122,7 +119,7 @@ static int __init cdh_cpu_probe_init(void)
 		return ret;
 	}
 
-	pr_info("cdh_pixel6_cpu_probe: registered %s and %s\n",
+	pr_info("cdh_cpu_probe: registered %s and %s\n",
 		CDH_CPU_PROC_PATH, CDH_CPU_SYSFS_PATH);
 	return 0;
 }
@@ -138,7 +135,7 @@ static void __exit cdh_cpu_probe_exit(void)
 		proc_remove(cdh_cpu_proc);
 		cdh_cpu_proc = NULL;
 	}
-	pr_info("cdh_pixel6_cpu_probe: removed\n");
+	pr_info("cdh_cpu_probe: removed\n");
 }
 
 module_init(cdh_cpu_probe_init);
@@ -146,4 +143,4 @@ module_exit(cdh_cpu_probe_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("fei_cong <fei_cong@hotmail.com>");
-MODULE_DESCRIPTION("Read-only Pixel6 Android15 CPU profile probe for CDH");
+MODULE_DESCRIPTION("Read-only Android15 CPU profile probe for CDH");

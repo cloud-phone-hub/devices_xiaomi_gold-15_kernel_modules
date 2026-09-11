@@ -1,2 +1,2 @@
 # Copyright (c) 2025-2026 fei_cong(https://github.com/feicong/feicong-course)
-obj-m += cdh_pixel6_cpu_probe.o
+obj-m += cdh_goodix_fingerprint.o

@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2025-2026 fei_cong(https://github.com/feicong/feicong-course)
  */
-#define pr_fmt(fmt) "cdh_pixel6_device_info_uptime: " fmt
+#define pr_fmt(fmt) "cdh_device_info_uptime: " fmt
 
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -16,38 +16,38 @@
 #include <linux/uaccess.h>
 #include <uapi/linux/kernel.h>
 
-#include "cdh_pixel6_device_info.h"
+#include "cdh_device_info.h"
 
-#define CDH_PIXEL6_UPTIME_OFFSET_SECONDS (2 * 24 * 60 * 60L)
-#define CDH_PIXEL6_UPTIME_KRETPROBE_MAXACTIVE 64
+#define CDH_UPTIME_OFFSET_SECONDS (2 * 24 * 60 * 60L)
+#define CDH_UPTIME_KRETPROBE_MAXACTIVE 64
 
-static long cdh_pixel6_uptime_offset_seconds = CDH_PIXEL6_UPTIME_OFFSET_SECONDS;
-module_param_named(uptime_offset_seconds, cdh_pixel6_uptime_offset_seconds, long, 0444);
-MODULE_PARM_DESC(uptime_offset_seconds, "Seconds added to app-visible Pixel6 uptime sources");
+static long cdh_uptime_offset_seconds = CDH_UPTIME_OFFSET_SECONDS;
+module_param_named(uptime_offset_seconds, cdh_uptime_offset_seconds, long, 0444);
+MODULE_PARM_DESC(uptime_offset_seconds, "Seconds added to app-visible  uptime sources");
 
-struct cdh_pixel6_sysinfo_data {
+struct cdh_sysinfo_data {
 	struct sysinfo __user *user_info;
 };
 
-struct cdh_pixel6_uptime_proc_data {
+struct cdh_uptime_proc_data {
 	struct seq_file *seq;
 };
 
-static bool cdh_pixel6_sysinfo_registered;
-static bool cdh_pixel6_uptime_proc_registered;
+static bool cdh_sysinfo_registered;
+static bool cdh_uptime_proc_registered;
 
-static long cdh_pixel6_adjust_uptime(long uptime)
+static long cdh_adjust_uptime(long uptime)
 {
-	if (cdh_pixel6_uptime_offset_seconds <= 0 || uptime < 0)
+	if (cdh_uptime_offset_seconds <= 0 || uptime < 0)
 		return uptime;
-	if (uptime > LONG_MAX - cdh_pixel6_uptime_offset_seconds)
+	if (uptime > LONG_MAX - cdh_uptime_offset_seconds)
 		return uptime;
-	return uptime + cdh_pixel6_uptime_offset_seconds;
+	return uptime + cdh_uptime_offset_seconds;
 }
 
-static int cdh_pixel6_sysinfo_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
+static int cdh_sysinfo_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	struct cdh_pixel6_sysinfo_data *data = (struct cdh_pixel6_sysinfo_data *)ri->data;
+	struct cdh_sysinfo_data *data = (struct cdh_sysinfo_data *)ri->data;
 
 	data->user_info = NULL;
 #ifdef CONFIG_ARM64
@@ -66,9 +66,9 @@ static int cdh_pixel6_sysinfo_entry(struct kretprobe_instance *ri, struct pt_reg
 	return 0;
 }
 
-static int cdh_pixel6_sysinfo_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
+static int cdh_sysinfo_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	struct cdh_pixel6_sysinfo_data *data = (struct cdh_pixel6_sysinfo_data *)ri->data;
+	struct cdh_sysinfo_data *data = (struct cdh_sysinfo_data *)ri->data;
 	struct sysinfo info;
 	long old_uptime;
 	long new_uptime;
@@ -79,7 +79,7 @@ static int cdh_pixel6_sysinfo_ret(struct kretprobe_instance *ri, struct pt_regs 
 		return 0;
 
 	old_uptime = info.uptime;
-	new_uptime = cdh_pixel6_adjust_uptime(old_uptime);
+	new_uptime = cdh_adjust_uptime(old_uptime);
 	if (new_uptime == old_uptime)
 		return 0;
 
@@ -89,19 +89,19 @@ static int cdh_pixel6_sysinfo_ret(struct kretprobe_instance *ri, struct pt_regs 
 	return 0;
 }
 
-static struct kretprobe cdh_pixel6_sysinfo_kretprobe = {
-	.handler = cdh_pixel6_sysinfo_ret,
-	.entry_handler = cdh_pixel6_sysinfo_entry,
-	.data_size = sizeof(struct cdh_pixel6_sysinfo_data),
-	.maxactive = CDH_PIXEL6_UPTIME_KRETPROBE_MAXACTIVE,
+static struct kretprobe cdh_sysinfo_kretprobe = {
+	.handler = cdh_sysinfo_ret,
+	.entry_handler = cdh_sysinfo_entry,
+	.data_size = sizeof(struct cdh_sysinfo_data),
+	.maxactive = CDH_UPTIME_KRETPROBE_MAXACTIVE,
 	.kp = {
 		.symbol_name = "__arm64_sys_sysinfo",
 	},
 };
 
-static int cdh_pixel6_uptime_proc_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
+static int cdh_uptime_proc_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	struct cdh_pixel6_uptime_proc_data *data = (struct cdh_pixel6_uptime_proc_data *)ri->data;
+	struct cdh_uptime_proc_data *data = (struct cdh_uptime_proc_data *)ri->data;
 
 #ifdef CONFIG_ARM64
 	data->seq = (struct seq_file *)regs->regs[0];
@@ -112,7 +112,7 @@ static int cdh_pixel6_uptime_proc_entry(struct kretprobe_instance *ri, struct pt
 	return 0;
 }
 
-static bool cdh_pixel6_parse_proc_uptime(const char *buf, size_t count,
+static bool cdh_parse_proc_uptime(const char *buf, size_t count,
 					 unsigned long *seconds,
 					 unsigned int *centiseconds,
 					 const char **rest, size_t *rest_len)
@@ -150,9 +150,9 @@ static bool cdh_pixel6_parse_proc_uptime(const char *buf, size_t count,
 	return true;
 }
 
-static int cdh_pixel6_uptime_proc_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
+static int cdh_uptime_proc_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	struct cdh_pixel6_uptime_proc_data *data = (struct cdh_pixel6_uptime_proc_data *)ri->data;
+	struct cdh_uptime_proc_data *data = (struct cdh_uptime_proc_data *)ri->data;
 	struct seq_file *m = data->seq;
 	unsigned long seconds;
 	unsigned int centiseconds;
@@ -164,11 +164,11 @@ static int cdh_pixel6_uptime_proc_ret(struct kretprobe_instance *ri, struct pt_r
 
 	if (regs_return_value(regs) != 0 || !m || !m->buf || !m->count)
 		return 0;
-	if (!cdh_pixel6_parse_proc_uptime(m->buf, m->count, &seconds,
+	if (!cdh_parse_proc_uptime(m->buf, m->count, &seconds,
 					  &centiseconds, &rest, &rest_len))
 		return 0;
 
-	adjusted = cdh_pixel6_adjust_uptime((long)seconds);
+	adjusted = cdh_adjust_uptime((long)seconds);
 	if (adjusted < 0 || adjusted == (long)seconds)
 		return 0;
 
@@ -188,49 +188,49 @@ static int cdh_pixel6_uptime_proc_ret(struct kretprobe_instance *ri, struct pt_r
 	return 0;
 }
 
-static struct kretprobe cdh_pixel6_uptime_proc_kretprobe = {
-	.handler = cdh_pixel6_uptime_proc_ret,
-	.entry_handler = cdh_pixel6_uptime_proc_entry,
-	.data_size = sizeof(struct cdh_pixel6_uptime_proc_data),
-	.maxactive = CDH_PIXEL6_UPTIME_KRETPROBE_MAXACTIVE,
+static struct kretprobe cdh_uptime_proc_kretprobe = {
+	.handler = cdh_uptime_proc_ret,
+	.entry_handler = cdh_uptime_proc_entry,
+	.data_size = sizeof(struct cdh_uptime_proc_data),
+	.maxactive = CDH_UPTIME_KRETPROBE_MAXACTIVE,
 	.kp = {
 		.symbol_name = "uptime_proc_show",
 	},
 };
 
-int cdh_pixel6_time_uptime_init(void)
+int cdh_time_uptime_init(void)
 {
 	int ret;
 
-	ret = register_kretprobe(&cdh_pixel6_sysinfo_kretprobe);
+	ret = register_kretprobe(&cdh_sysinfo_kretprobe);
 	if (ret) {
 		pr_err("failed to register sysinfo kretprobe:%d\n", ret);
 		return ret;
 	}
-	cdh_pixel6_sysinfo_registered = true;
+	cdh_sysinfo_registered = true;
 
-	ret = register_kretprobe(&cdh_pixel6_uptime_proc_kretprobe);
+	ret = register_kretprobe(&cdh_uptime_proc_kretprobe);
 	if (ret) {
-		unregister_kretprobe(&cdh_pixel6_sysinfo_kretprobe);
-		cdh_pixel6_sysinfo_registered = false;
+		unregister_kretprobe(&cdh_sysinfo_kretprobe);
+		cdh_sysinfo_registered = false;
 		pr_err("failed to register uptime_proc_show kretprobe:%d\n", ret);
 		return ret;
 	}
-	cdh_pixel6_uptime_proc_registered = true;
+	cdh_uptime_proc_registered = true;
 	pr_info("registered uptime offset hooks offset_seconds=%ld\n",
-		cdh_pixel6_uptime_offset_seconds);
+		cdh_uptime_offset_seconds);
 	return 0;
 }
 
-void cdh_pixel6_time_uptime_exit(void)
+void cdh_time_uptime_exit(void)
 {
-	if (cdh_pixel6_uptime_proc_registered) {
-		unregister_kretprobe(&cdh_pixel6_uptime_proc_kretprobe);
-		cdh_pixel6_uptime_proc_registered = false;
+	if (cdh_uptime_proc_registered) {
+		unregister_kretprobe(&cdh_uptime_proc_kretprobe);
+		cdh_uptime_proc_registered = false;
 	}
-	if (cdh_pixel6_sysinfo_registered) {
-		unregister_kretprobe(&cdh_pixel6_sysinfo_kretprobe);
-		cdh_pixel6_sysinfo_registered = false;
+	if (cdh_sysinfo_registered) {
+		unregister_kretprobe(&cdh_sysinfo_kretprobe);
+		cdh_sysinfo_registered = false;
 	}
 	pr_info("unregistered uptime offset hooks\n");
 }

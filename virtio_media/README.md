@@ -20,7 +20,7 @@
 
 ## 构建与发布
 
-`tools/kernel/build-pixel6-15-lineage-kernel.sh`从设备仓当前工作树和`kernel/`当前分支构建
+`tools/kernel/build-kernel.sh`从设备仓当前工作树和`kernel/`当前分支构建
 Pixel6 Android15内核与全部设备模块。当前构建配方为
 `lineage-22.1-gki-virtio-wifi-pixel6-modules-v12`，发布模块必须带
 `6.6.127-4k-cdh` vermagic，并与同目录`Module.symvers`完成MODPOST。

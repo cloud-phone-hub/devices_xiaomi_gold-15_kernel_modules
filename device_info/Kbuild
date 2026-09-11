@@ -1,5 +1,5 @@
 # Copyright (c) 2025-2026 fei_cong(https://github.com/feicong/feicong-course)
-MODULE_NAME := cdh_pixel6_device_info
+MODULE_NAME := cdh_device_info
 $(MODULE_NAME)-objs := \
 	core/main.o \
 	cpu/cpu_display.o \

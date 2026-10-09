@@ -4,7 +4,7 @@
 
 ## 边界
 
-- 目标设备：`note13-5g-15`（Redmi Note 13 5G / MT6833，真机实测）。
+- 目标设备：`gold-15`（Redmi Note 13 5G / MT6833，真机实测）。
 - guest内核ABI：Android15 GKI 6.6，模块固定使用`ghcr.io/feicong/droid-ddk:android15-6.6`构建。
 - 当前用户态展示目标：`uname -r=6.6.89-android15-8-gbe8d201b0d27-ab13762941-4k`。
 - 当前 ABI 校验目标：`gki_abi_release=6.6.127-4k-cdh`。

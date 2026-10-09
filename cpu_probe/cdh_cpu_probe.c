@@ -15,7 +15,7 @@ static struct proc_dir_entry *cdh_cpu_proc;
 static struct kobject *cdh_cpu_kobj;
 
 static const char cdh_cpu_profile[] =
-	"device=note13-5g-15\n"
+	"device=gold-15\n"
 	"android=15\n"
 	"source= Redmi Note 13 5G (gold) OS3.0.9.0.VNQCNXM real device\n"
 	"features=fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp\n"

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0
+# CDH gold-15：虚拟 Mali 的 platform_device 注册模块。
+# kbase 本体走 in-tree 构建（见 kernel/build/build-kernel.sh 的 mali 接线），
+# 本模块只负责「造出 kbase 能匹配到的设备」，故不依赖任何 CONFIG_MALI_*。
+MODULE_NAME := cdh_mali_plat
+$(MODULE_NAME)-objs := \
+	plat/cdh_mali_plat.o
+
+obj-m += $(MODULE_NAME).o

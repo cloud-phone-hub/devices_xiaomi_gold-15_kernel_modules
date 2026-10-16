@@ -202,7 +202,7 @@ EXPORT_SYMBOL_GPL(cdh_bridge_submit);
  * 写真实页。pfn_valid 检查兜底（device 内存 PFN 直接拒绝，防 kmap 崩）。
  * 成功返回 0；失败返回负值。*locked 由 fixup_user_fault 会话管理。
  */
-static int cdh_write_pfnmap(struct mm_struct *mm, unsigned long uaddr,
+__maybe_unused static int cdh_write_pfnmap(struct mm_struct *mm, unsigned long uaddr,
 			    const u8 *src, u32 chunk, int *locked)
 {
 	unsigned long page_addr = uaddr & PAGE_MASK;
@@ -250,7 +250,7 @@ static int cdh_write_pfnmap(struct mm_struct *mm, unsigned long uaddr,
 	return 0;
 }
 
-static int cdh_write_user(struct mm_struct *mm, u64 uaddr, const u8 *src, u32 len)
+__maybe_unused static int cdh_write_user(struct mm_struct *mm, u64 uaddr, const u8 *src, u32 len)
 {
 	int ret = 0;
 	int locked = 1;

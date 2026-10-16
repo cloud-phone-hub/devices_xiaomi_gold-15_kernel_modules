@@ -304,6 +304,38 @@ patch("drivers/gpu/drm/virtio/virtgpu_display.c",
       "static const struct drm_crtc_funcs virtio_gpu_crtc_funcs = {\n",
       "virtgpu_display.c 回调 extern 前置（声明先于使用）")
 
+# (6g) virtgpu_display.c: connector 回调 extern 与属性注册（幂等）
+patch("drivers/gpu/drm/virtio/virtgpu_display.c",
+      "static const struct drm_connector_funcs virtio_gpu_connector_funcs = {\n",
+      "/* CDH: MTK Connector 属性读写回调（virtgpu_mtk_props.c） */\n"
+      "extern void virtio_gpu_mtk_attach_connector_props(struct drm_device *dev,\n"
+      "\t\t\t\t\t\t struct drm_connector *conn);\n"
+      "extern int virtio_gpu_mtk_connector_atomic_get_property(struct drm_connector *conn,\n"
+      "\t\t\t\t\t\t\t const struct drm_connector_state *state,\n"
+      "\t\t\t\t\t\t\t struct drm_property *property, u64 *val);\n"
+      "extern int virtio_gpu_mtk_connector_atomic_set_property(struct drm_connector *conn,\n"
+      "\t\t\t\t\t\t\t struct drm_connector_state *state,\n"
+      "\t\t\t\t\t\t\t struct drm_property *property, u64 val);\n"
+      "static const struct drm_connector_funcs virtio_gpu_connector_funcs = {\n",
+      "virtgpu_display.c connector 回调 extern 前置")
+
+patch("drivers/gpu/drm/virtio/virtgpu_display.c",
+      "\t.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,\n"
+      "};\n",
+      "\t.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,\n"
+      "\t/* CDH: MTK Connector 属性读写（virtgpu_mtk_props.c） */\n"
+      "\t.atomic_get_property  = virtio_gpu_mtk_connector_atomic_get_property,\n"
+      "\t.atomic_set_property  = virtio_gpu_mtk_connector_atomic_set_property,\n"
+      "};\n",
+      "virtgpu_display.c connector_funcs 补 atomic_get/set_property")
+
+patch("drivers/gpu/drm/virtio/virtgpu_display.c",
+      "\tdrm_connector_helper_add(connector, &virtio_gpu_conn_helper_funcs);\n",
+      "\tdrm_connector_helper_add(connector, &virtio_gpu_conn_helper_funcs);\n"
+      "\t/* CDH: MTK Connector 属性注册（virtgpu_mtk_props.c） */\n"
+      "\tvirtio_gpu_mtk_attach_connector_props(dev, connector);\n",
+      "virtgpu_display.c 调用 mtk_attach_connector_props")
+
 # (7) Phase C·第三补丁：virtgpu_ioctl.c 的 getparam handler 顶部加 MTK 分流。
 #     根因（实例 28 反汇编 + 28 轮日志完整因果链）：
 #     MTK DrmDevice::createOverlaySession 发 DISP_IOCTL_CREATE_SESSION=0xc0106443，
@@ -419,6 +451,58 @@ patch("drivers/gpu/drm/virtio/virtgpu_plane.c",
       "\tDRM_FORMAT_C8,\n"
       "};\n",
       "virtgpu_plane.c 格式表加 RGB332/C8")
+
+# (9b) virtgpu_plane.c: plane 属性、回调与 can_position 放行（幂等）
+patch("drivers/gpu/drm/virtio/virtgpu_plane.c",
+      "static const struct drm_plane_funcs virtio_gpu_plane_funcs = {\n",
+      "/* CDH: MTK Plane 属性与读写回调（virtgpu_mtk_props.c） */\n"
+      "extern void virtio_gpu_mtk_attach_plane_props(struct drm_device *dev,\n"
+      "\t\t\t\t\t      struct drm_plane *plane);\n"
+      "extern int virtio_gpu_mtk_plane_atomic_get_property(struct drm_plane *plane,\n"
+      "\t\t\t\t\t\t   const struct drm_plane_state *state,\n"
+      "\t\t\t\t\t\t   struct drm_property *property, u64 *val);\n"
+      "extern int virtio_gpu_mtk_plane_atomic_set_property(struct drm_plane *plane,\n"
+      "\t\t\t\t\t\t   struct drm_plane_state *state,\n"
+      "\t\t\t\t\t\t   struct drm_property *property, u64 val);\n"
+      "static const struct drm_plane_funcs virtio_gpu_plane_funcs = {\n",
+      "virtgpu_plane.c plane 回调 extern 前置")
+
+patch("drivers/gpu/drm/virtio/virtgpu_plane.c",
+      "\t.atomic_destroy_state\t= drm_atomic_helper_plane_destroy_state,\n"
+      "};\n",
+      "\t.atomic_destroy_state\t= drm_atomic_helper_plane_destroy_state,\n"
+      "\t/* CDH: MTK Plane 属性读写（virtgpu_mtk_props.c） */\n"
+      "\t.atomic_get_property\t= virtio_gpu_mtk_plane_atomic_get_property,\n"
+      "\t.atomic_set_property\t= virtio_gpu_mtk_plane_atomic_set_property,\n"
+      "};\n",
+      "virtgpu_plane.c plane_funcs 补 atomic_get/set_property")
+
+patch("drivers/gpu/drm/virtio/virtgpu_plane.c",
+      "\tbool is_cursor = plane->type == DRM_PLANE_TYPE_CURSOR;\n",
+      "\t/* bool is_cursor = plane->type == DRM_PLANE_TYPE_CURSOR; (can_position 恒为 true) */\n",
+      "virtgpu_plane.c 注释 unused is_cursor")
+
+patch("drivers/gpu/drm/virtio/virtgpu_plane.c",
+      "\tret = drm_atomic_helper_check_plane_state(new_plane_state, crtc_state,\n"
+      "\t\t\t\t\t\t  DRM_PLANE_NO_SCALING,\n"
+      "\t\t\t\t\t\t  DRM_PLANE_NO_SCALING,\n"
+      "\t\t\t\t\t\t  is_cursor, true);\n",
+      "\t/* CDH: can_position 恒设为 true，放行状态栏/导航栏等非全屏图层，防止 -EINVAL(-22) */\n"
+      "\tret = drm_atomic_helper_check_plane_state(new_plane_state, crtc_state,\n"
+      "\t\t\t\t\t\t  DRM_PLANE_NO_SCALING,\n"
+      "\t\t\t\t\t\t  DRM_PLANE_NO_SCALING,\n"
+      "\t\t\t\t\t\t  true, true);\n",
+      "virtgpu_plane.c atomic_check 放行 can_position")
+
+patch("drivers/gpu/drm/virtio/virtgpu_plane.c",
+      "\tif (type == DRM_PLANE_TYPE_PRIMARY)\n"
+      "\t\tdrm_plane_enable_fb_damage_clips(plane);\n",
+      "\tif (type == DRM_PLANE_TYPE_PRIMARY)\n"
+      "\t\tdrm_plane_enable_fb_damage_clips(plane);\n"
+      "\n"
+      "\t/* CDH: 挂载 MTK Plane 必需属性（alpha, blend mode, zpos, MTK 私有属性） */\n"
+      "\tvirtio_gpu_mtk_attach_plane_props(dev, plane);\n",
+      "virtgpu_plane.c 调用 mtk_attach_plane_props")
 
 # (10) Phase C·第六补丁：virtgpu_display.c 去掉 fb_modifiers_not_supported 声明。
 #      根因（实例 31，反汇编 hwc.so DrmModeResource::addFb @0x190850 实锤）：
@@ -931,18 +1015,8 @@ patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
       "\t\t */\n"
       "\t\tif ((cdh_real_req & BASE_JD_REQ_FS) && cdh_real_jc) {\n"
       "\t\t\tstatic atomic_t cdh_fill_probe = ATOMIC_INIT(0);\n"
-      "\t\t\tstatic u32 cdh_fill_pat[1024];\n"
-      "\t\t\tstatic atomic_t cdh_fill_init = ATOMIC_INIT(0);\n"
       "\t\t\tu64 cdh_j = cdh_real_jc;\n"
       "\t\t\tu32 cdh_job_n;\n"
-      "\n"
-      "\t\t\tif (!atomic_read(&cdh_fill_init)) {\n"
-      "\t\t\t\tu32 k;\n"
-      "\n"
-      "\t\t\t\tfor (k = 0; k < ARRAY_SIZE(cdh_fill_pat); k++)\n"
-      "\t\t\t\t\tcdh_fill_pat[k] = 0xFF00FF00;/* RGBA/BGRA 双制式同为绿 */\n"
-      "\t\t\t\tatomic_set(&cdh_fill_init, 1);\n"
-      "\t\t\t}\n"
       "\t\t\tfor (cdh_job_n = 0; cdh_job_n < 8 && cdh_j; cdh_job_n++) {\n"
       "\t\t\t\tu8 cdh_job[64];\n"
       "\t\t\t\tu32 cdh_hdr, cdh_type;\n"
@@ -962,7 +1036,7 @@ patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
       "\t\t\t\t\tu8 cdh_p[64], cdh_rt[64];\n"
       "\t\t\t\t\tu32 cdh_w = 0, cdh_h = 0;\n"
       "\t\t\t\t\tu64 cdh_base = 0;\n"
-      "\t\t\t\t\tu32 cdh_rows = 0, cdh_surf = 0, cdh_len = 0;\n"
+      "\t\t\t\t\tu32 cdh_rows = 0, cdh_surf = 0;\n"
       "\t\t\t\t\tu32 cdh_w0 = 0, cdh_w1 = 0, cdh_w2 = 0;\n"
       "\t\t\t\t\tu32 cdh_blk = 0, cdh_fmt = 0, cdh_we = 0, cdh_filled = 0;\n"
       "\n"
@@ -1018,79 +1092,8 @@ patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
       "\t\t\t\t\t *     Body offset=tiles_x*tiles_y*1024 对齐 4096（实测\n"
       "\t\t\t\t\t *     1080x2400: 9*19*1024=175104→176128 ✓）。\n"
       "\t\t\t\t\t * solid 块无 body 载荷，body 不动。 */\n"
-      "\t\t\t\t\tif (cdh_blk == 2) {\n"
-      "\t\t\t\t\t\tcdh_len = cdh_rows * cdh_h;\n"
-      "\t\t\t\t\t\tif (cdh_len > 0x4000000)\n"
-      "\t\t\t\t\t\t\tgoto cdh_next_job;\n"
-      "\t\t\t\t\t\t{\n"
-      "\t\t\t\t\t\t\tu32 off = 0;\n"
-      "\n"
-      "\t\t\t\t\t\t\twhile (off < cdh_len) {\n"
-      "\t\t\t\t\t\t\t\tu32 chunk = min_t(u32, sizeof(cdh_fill_pat),\n"
-      "\t\t\t\t\t\t\t\t\t\t  cdh_len - off);\n"
-      "\n"
-      "\t\t\t\t\t\t\t\tif (copy_to_user(u64_to_user_ptr(cdh_base) + off,\n"
-      "\t\t\t\t\t\t\t\t\t\t cdh_fill_pat, chunk))\n"
-      "\t\t\t\t\t\t\t\t\tbreak;\n"
-      "\t\t\t\t\t\t\t\toff += chunk;\n"
-      "\t\t\t\t\t\t\t}\n"
-      "\t\t\t\t\t\t\tcdh_filled = off;\n"
-      "\t\t\t\t\t\t}\n"
-      "\t\t\t\t\t} else if (cdh_blk == 12 || cdh_blk == 13) {\n"
-      "\t\t\t\t\t\tu32 sb_w = (cdh_w2 & 0x4) ? 32 : 16;\n"
-      "\t\t\t\t\t\tu32 sb_h = (cdh_w2 & 0x4) ? 8 : 16;\n"
-      "\t\t\t\t\t\tu32 scols = (cdh_w + sb_w - 1) / sb_w;\n"
-      "\t\t\t\t\t\tu32 srows = (cdh_h + sb_h - 1) / sb_h;\n"
-      "\t\t\t\t\t\tu8 cdh_hdrb[16];\n"
-      "\t\t\t\t\t\tu32 r, c, stop = 0, nh = 0;\n"
-      "\n"
-      "\t\t\t\t\t\tmemset(cdh_hdrb, 0, sizeof(cdh_hdrb));\n"
-      "\t\t\t\t\t\tcdh_hdrb[8] = 0x00;  /* R */\n"
-      "\t\t\t\t\t\tcdh_hdrb[9] = 0xff;  /* G */\n"
-      "\t\t\t\t\t\tcdh_hdrb[10] = 0x00; /* B */\n"
-      "\t\t\t\t\t\tcdh_hdrb[11] = 0xff; /* A */\n"
-      "\t\t\t\t\t\tif (cdh_blk == 12) {\n"
-      "\t\t\t\t\t\t\tfor (r = 0; r < srows && !stop; r++)\n"
-      "\t\t\t\t\t\t\t\tfor (c = 0; c < scols && !stop; c++) {\n"
-      "\t\t\t\t\t\t\t\t\tif (copy_to_user(u64_to_user_ptr(cdh_base) +\n"
-      "\t\t\t\t\t\t\t\t\t\t\t (u64)r * cdh_rows +\n"
-      "\t\t\t\t\t\t\t\t\t\t\t (u64)c * 16,\n"
-      "\t\t\t\t\t\t\t\t\t\t\t cdh_hdrb, sizeof(cdh_hdrb)))\n"
-      "\t\t\t\t\t\t\t\t\t\tstop = 1;\n"
-      "\t\t\t\t\t\t\t\t\telse\n"
-      "\t\t\t\t\t\t\t\t\t\tnh++;\n"
-      "\t\t\t\t\t\t\t\t}\n"
-      "\t\t\t\t\t\t} else {\n"
-      "\t\t\t\t\t\t\tu32 txs = (scols + 7) / 8;\n"
-      "\t\t\t\t\t\t\tu32 tys = (srows + 7) / 8;\n"
-      "\t\t\t\t\t\t\tu32 tx, ty, i, j;\n"
-      "\n"
-      "\t\t\t\t\t\t\tfor (ty = 0; ty < tys && !stop; ty++)\n"
-      "\t\t\t\t\t\t\t\tfor (tx = 0; tx < txs && !stop; tx++) {\n"
-      "\t\t\t\t\t\t\t\t\tu64 tb = cdh_base +\n"
-      "\t\t\t\t\t\t\t\t\t\t (u64)ty * cdh_rows +\n"
-      "\t\t\t\t\t\t\t\t\t\t (u64)tx * 1024;\n"
-      "\n"
-      "\t\t\t\t\t\t\t\t\tfor (j = 0; j < 8 && !stop; j++)\n"
-      "\t\t\t\t\t\t\t\t\t\tfor (i = 0; i < 8 && !stop; i++) {\n"
-      "\t\t\t\t\t\t\t\t\t\t\tu32 cc = tx * 8 + i;\n"
-      "\t\t\t\t\t\t\t\t\t\t\tu32 rr = ty * 8 + j;\n"
-      "\n"
-      "\t\t\t\t\t\t\t\t\t\t\tif (cc >= scols || rr >= srows)\n"
-      "\t\t\t\t\t\t\t\t\t\t\t\tcontinue;\n"
-      "\t\t\t\t\t\t\t\t\t\t\tif (copy_to_user(\n"
-      "\t\t\t\t\t\t\t\t\t\t\t\t\tu64_to_user_ptr(tb +\n"
-      "\t\t\t\t\t\t\t\t\t\t\t\t\t(u64)(j * 8 + i) * 16),\n"
-      "\t\t\t\t\t\t\t\t\t\t\t\t\tcdh_hdrb,\n"
-      "\t\t\t\t\t\t\t\t\t\t\t\t\tsizeof(cdh_hdrb)))\n"
-      "\t\t\t\t\t\t\t\t\t\t\t\tstop = 1;\n"
-      "\t\t\t\t\t\t\t\t\t\t\telse\n"
-      "\t\t\t\t\t\t\t\t\t\t\t\tnh++;\n"
-      "\t\t\t\t\t\t\t\t\t\t}\n"
-      "\t\t\t\t\t\t\t\t}\n"
-      "\t\t\t\t\t\t}\n"
-      "\t\t\t\t\t\tcdh_filled = nh * 16;\n"
-      "\t\t\t\t\t}\n"
+      "\t\t\t\t\t/* CDH: 彻底关闭 (16d) 纯绿色硬编码兜底填色，保留 RT 元数据供宿主渲染 */\n"
+      "\t\t\t\t\tcdh_filled = 0;\n"
       "\t\t\t\t\tif (atomic_inc_return(&cdh_fill_probe) <= 16)\n"
       "\t\t\t\t\t\tdev_info(kbdev->dev,\n"
       "\t\t\t\t\t\t\t \"cdh-mali: B2 fill rt=0x%llx rows=%u surf=%u w=%u h=%u rts=%u zs=%u blk=%u fmt=%u we=%u w0=0x%x w2=0x%x filled=%u\\n\",\n"
@@ -1164,6 +1167,12 @@ patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
 #      ② .Binary 落在 GPU-exec 区（0x7f00_xxxx_xxxx，CPU 侧 PROT_NONE），
 #      copy_from_user 必失败 → 改用 kbase_vmap/kbase_vunmap 取内核可读指针
 #      （copy_from_user 仍作兜底）。
+#      v77（recapture，消除截断面）：Shader Program（v9.xml 32B）无长度字段
+#      （仅 Type/Stage/Preload/Binary）→ dump 上限 128B 放宽到 4KB（防呆），
+#      kbase_vmap 整段越出 region 时折半重试（下限 128B），并打印实际遍历长度
+#      len=<dump 字节数> end=<首个 flow=end（Flow 枚举 15，bits59-62）处字节数>。
+#      128B 旧上限把长 shader 截断（E2E 里 BRANCHZ 目标越界 index=25/19>15
+#      的根因），本次按完整指令流重捕。
 patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
       "\t\tuser_addr = (void __user *)((uintptr_t)user_addr + stride);\n"
       "\n"
@@ -1173,7 +1182,8 @@ patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
       "\t\t * 静态布局提取 Shader Program → .Binary 机器码（.Binary 在\n"
       "\t\t * GPU-exec 区，走 kbase_vmap 取内核映射）；另做有界指针追踪\n"
       "\t\t * （命中 Descriptor Type Shader=8 才打印，抑制误报）。仅打印\n"
-      "\t\t * 不改行为；限 16 次提交、24 次追踪。定案后删。 */\n"
+      "\t\t * 不改行为；限 16 次提交、24 次追踪；dump 上限 4KB 并打印\n"
+      "\t\t * 实际遍历长度 len/end（128B 截断面已消除）。定案后删。 */\n"
       "\t\tif (cdh_real_jc && !(cdh_real_req & BASE_JD_REQ_SOFT_JOB) &&\n"
       "\t\t    !(cdh_real_req & BASE_JD_REQ_END_RENDERPASS)) {\n"
       "\t\t\tstatic atomic_t cdh_p3_probe = ATOMIC_INIT(0);\n"
@@ -1269,31 +1279,59 @@ patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
       "\t\t\t\t\t\t\t\t       cdh_p3_sp, sizeof(cdh_p3_sp), false);\n"
       "\t\t\t\t\t\t\tif (cdh_p3_bin) {\n"
       "\t\t\t\t\t\t\t\tstruct kbase_vmap_struct cdh_p3_bmap;\n"
-      "\t\t\t\t\t\t\t\tu8 cdh_p3_buf[128];\n"
-      "\t\t\t\t\t\t\t\tconst u8 *cdh_p3_code =\n"
-      "\t\t\t\t\t\t\t\t\tkbase_vmap(kctx, cdh_p3_bin,\n"
-      "\t\t\t\t\t\t\t\t\t\t   sizeof(cdh_p3_buf),\n"
-      "\t\t\t\t\t\t\t\t\t\t   &cdh_p3_bmap);\n"
+      "\t\t\t\t\t\t\t\tstatic u8 cdh_p3_buf[4096];\n"
+      "\t\t\t\t\t\t\t\tconst u8 *cdh_p3_code = NULL, *cdh_p3_src = NULL;\n"
+      "\t\t\t\t\t\t\t\tsize_t cdh_p3_dump = 0, cdh_p3_end = 0;\n"
+      "\t\t\t\t\t\t\t\tsize_t cdh_p3_try, cdh_p3_i;\n"
       "\n"
-      "\t\t\t\t\t\t\t\tif (cdh_p3_code) {\n"
+      "\t\t\t\t\t\t\t\t/* Shader Program 无长度字段（v9.xml 仅\n"
+      "\t\t\t\t\t\t\t\t * Type/Stage/Preload/Binary）→ dump 上限\n"
+      "\t\t\t\t\t\t\t\t * 4KB 防呆；kbase_vmap 须整段落在 region\n"
+      "\t\t\t\t\t\t\t\t * 内，越界自动折半重试（下限 128B）。 */\n"
+      "\t\t\t\t\t\t\t\tfor (cdh_p3_try = 4096; cdh_p3_try >= 128;\n"
+      "\t\t\t\t\t\t\t\t     cdh_p3_try >>= 1) {\n"
+      "\t\t\t\t\t\t\t\t\tcdh_p3_code = kbase_vmap(kctx, cdh_p3_bin,\n"
+      "\t\t\t\t\t\t\t\t\t\t\t   cdh_p3_try,\n"
+      "\t\t\t\t\t\t\t\t\t\t\t   &cdh_p3_bmap);\n"
+      "\t\t\t\t\t\t\t\t\tif (cdh_p3_code) {\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_p3_src = cdh_p3_code;\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_p3_dump = cdh_p3_try;\n"
+      "\t\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\tif (!cdh_p3_src &&\n"
+      "\t\t\t\t\t\t\t\t    !copy_from_user(cdh_p3_buf,\n"
+      "\t\t\t\t\t\t\t\t\t\t    u64_to_user_ptr(cdh_p3_bin),\n"
+      "\t\t\t\t\t\t\t\t\t\t    sizeof(cdh_p3_buf))) {\n"
+      "\t\t\t\t\t\t\t\t\tcdh_p3_src = cdh_p3_buf;\n"
+      "\t\t\t\t\t\t\t\t\tcdh_p3_dump = sizeof(cdh_p3_buf);\n"
+      "\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\tif (cdh_p3_src) {\n"
+      "\t\t\t\t\t\t\t\t\t/* 实际遍历长度：扫到首个 flow=end\n"
+      "\t\t\t\t\t\t\t\t\t * （Flow 枚举 15=Return from shader，\n"
+      "\t\t\t\t\t\t\t\t\t * bits59-62）为止（含该字）。 */\n"
+      "\t\t\t\t\t\t\t\t\tfor (cdh_p3_i = 0;\n"
+      "\t\t\t\t\t\t\t\t\t     cdh_p3_i + 8 <= cdh_p3_dump;\n"
+      "\t\t\t\t\t\t\t\t\t     cdh_p3_i += 8) {\n"
+      "\t\t\t\t\t\t\t\t\t\tu64 cdh_p3_w;\n"
+      "\n"
+      "\t\t\t\t\t\t\t\t\t\tmemcpy(&cdh_p3_w,\n"
+      "\t\t\t\t\t\t\t\t\t\t       cdh_p3_src + cdh_p3_i, 8);\n"
+      "\t\t\t\t\t\t\t\t\t\tif (((cdh_p3_w >> 59) & 0xf) == 15) {\n"
+      "\t\t\t\t\t\t\t\t\t\t\tcdh_p3_end = cdh_p3_i + 8;\n"
+      "\t\t\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\t\t}\n"
       "\t\t\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
-      "\t\t\t\t\t\t\t\t\t\t \"cdh-mali: P3 code vmap 0x%llx\\n\",\n"
-      "\t\t\t\t\t\t\t\t\t\t cdh_p3_bin);\n"
+      "\t\t\t\t\t\t\t\t\t\t \"cdh-mali: P3 code %s 0x%llx len=%zu end=%zu\\n\",\n"
+      "\t\t\t\t\t\t\t\t\t\t cdh_p3_code ? \"vmap\" : \"user\",\n"
+      "\t\t\t\t\t\t\t\t\t\t cdh_p3_bin, cdh_p3_dump, cdh_p3_end);\n"
       "\t\t\t\t\t\t\t\t\tprint_hex_dump(KERN_INFO, \"cdh-mali: \",\n"
       "\t\t\t\t\t\t\t\t\t\t       DUMP_PREFIX_OFFSET, 32, 8,\n"
-      "\t\t\t\t\t\t\t\t\t\t       cdh_p3_code,\n"
-      "\t\t\t\t\t\t\t\t\t\t       sizeof(cdh_p3_buf), false);\n"
-      "\t\t\t\t\t\t\t\t\tkbase_vunmap(kctx, &cdh_p3_bmap);\n"
-      "\t\t\t\t\t\t\t\t} else if (!copy_from_user(cdh_p3_buf,\n"
-      "\t\t\t\t\t\t\t\t\t\t u64_to_user_ptr(cdh_p3_bin),\n"
-      "\t\t\t\t\t\t\t\t\t\t sizeof(cdh_p3_buf))) {\n"
-      "\t\t\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
-      "\t\t\t\t\t\t\t\t\t\t \"cdh-mali: P3 code user 0x%llx\\n\",\n"
-      "\t\t\t\t\t\t\t\t\t\t cdh_p3_bin);\n"
-      "\t\t\t\t\t\t\t\t\tprint_hex_dump(KERN_INFO, \"cdh-mali: \",\n"
-      "\t\t\t\t\t\t\t\t\t\t       DUMP_PREFIX_OFFSET, 32, 8,\n"
-      "\t\t\t\t\t\t\t\t\t\t       cdh_p3_buf,\n"
-      "\t\t\t\t\t\t\t\t\t\t       sizeof(cdh_p3_buf), false);\n"
+      "\t\t\t\t\t\t\t\t\t\t       cdh_p3_src, cdh_p3_dump,\n"
+      "\t\t\t\t\t\t\t\t\t\t       false);\n"
+      "\t\t\t\t\t\t\t\t\tif (cdh_p3_code)\n"
+      "\t\t\t\t\t\t\t\t\t\tkbase_vunmap(kctx, &cdh_p3_bmap);\n"
       "\t\t\t\t\t\t\t\t} else {\n"
       "\t\t\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
       "\t\t\t\t\t\t\t\t\t\t \"cdh-mali: P3 code unreadable 0x%llx\\n\",\n"
@@ -1332,18 +1370,40 @@ patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
       "\t\t\t\t\t\t\t       cdh_p3_peek, sizeof(cdh_p3_peek), false);\n"
       "\t\t\t\t\t\tdo {\n"
       "\t\t\t\t\t\t\tstruct kbase_vmap_struct cdh_p3_cb;\n"
-      "\t\t\t\t\t\t\tu8 cdh_p3_cbuf[128];\n"
-      "\t\t\t\t\t\t\tconst u8 *cdh_p3_cc =\n"
-      "\t\t\t\t\t\t\t\tkbase_vmap(kctx, cdh_p3_vb,\n"
-      "\t\t\t\t\t\t\t\t\t   sizeof(cdh_p3_cbuf), &cdh_p3_cb);\n"
+      "\t\t\t\t\t\t\tconst u8 *cdh_p3_cc = NULL;\n"
+      "\t\t\t\t\t\t\tsize_t cdh_p3_cdump = 0, cdh_p3_cend = 0;\n"
+      "\t\t\t\t\t\t\tsize_t cdh_p3_try, cdh_p3_i;\n"
+      "\n"
+      "\t\t\t\t\t\t\t/* 与主路径同：4KB 防呆上限 + 折半重试。 */\n"
+      "\t\t\t\t\t\t\tfor (cdh_p3_try = 4096; cdh_p3_try >= 128;\n"
+      "\t\t\t\t\t\t\t     cdh_p3_try >>= 1) {\n"
+      "\t\t\t\t\t\t\t\tcdh_p3_cc = kbase_vmap(kctx, cdh_p3_vb,\n"
+      "\t\t\t\t\t\t\t\t\t\t   cdh_p3_try, &cdh_p3_cb);\n"
+      "\t\t\t\t\t\t\t\tif (cdh_p3_cc) {\n"
+      "\t\t\t\t\t\t\t\t\tcdh_p3_cdump = cdh_p3_try;\n"
+      "\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t}\n"
       "\t\t\t\t\t\t\tif (cdh_p3_cc) {\n"
+      "\t\t\t\t\t\t\t\tfor (cdh_p3_i = 0;\n"
+      "\t\t\t\t\t\t\t\t     cdh_p3_i + 8 <= cdh_p3_cdump;\n"
+      "\t\t\t\t\t\t\t\t     cdh_p3_i += 8) {\n"
+      "\t\t\t\t\t\t\t\t\tu64 cdh_p3_w;\n"
+      "\n"
+      "\t\t\t\t\t\t\t\t\tmemcpy(&cdh_p3_w,\n"
+      "\t\t\t\t\t\t\t\t\t       cdh_p3_cc + cdh_p3_i, 8);\n"
+      "\t\t\t\t\t\t\t\t\tif (((cdh_p3_w >> 59) & 0xf) == 15) {\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_p3_cend = cdh_p3_i + 8;\n"
+      "\t\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\t}\n"
       "\t\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
-      "\t\t\t\t\t\t\t\t\t \"cdh-mali: P3 chase-code 0x%llx\\n\",\n"
-      "\t\t\t\t\t\t\t\t\t cdh_p3_vb);\n"
+      "\t\t\t\t\t\t\t\t\t \"cdh-mali: P3 chase-code 0x%llx len=%zu end=%zu\\n\",\n"
+      "\t\t\t\t\t\t\t\t\t cdh_p3_vb, cdh_p3_cdump, cdh_p3_cend);\n"
       "\t\t\t\t\t\t\t\tprint_hex_dump(KERN_INFO, \"cdh-mali: \",\n"
       "\t\t\t\t\t\t\t\t\t       DUMP_PREFIX_OFFSET, 32, 8,\n"
-      "\t\t\t\t\t\t\t\t\t       cdh_p3_cc,\n"
-      "\t\t\t\t\t\t\t\t\t       sizeof(cdh_p3_cbuf), false);\n"
+      "\t\t\t\t\t\t\t\t\t       cdh_p3_cc, cdh_p3_cdump,\n"
+      "\t\t\t\t\t\t\t\t\t       false);\n"
       "\t\t\t\t\t\t\t\tkbase_vunmap(kctx, &cdh_p3_cb);\n"
       "\t\t\t\t\t\t\t}\n"
       "\t\t\t\t\t\t} while (0);\n"
@@ -1382,11 +1442,13 @@ patch("kernel/ptrace.c",
       "\tint retval;\n"
       "\n"
       "\t/* CDH(gold-15): 拒绝 crash_dump/debuggerd 冻结 SF/composer/\n"
-      "\t * system_server（云机 watchdog 死锁链，wire-kbase.sh (17)，\n"
-      "\t * run68/69 实锤，见上）。 */\n"
+      "\t * system_server/gpumbox_bridge（云机 watchdog 死锁链，wire-kbase.sh\n"
+      "\t * (17)，run68/69 实锤；gpumbox_bridge = B2 渲染桥 helper，被冻结\n"
+      "\t * 则回执段永不闭环（b2-bridge-min 卡点①）。 */\n"
       "\tif (task->group_leader &&\n"
       "\t    (!strcmp(task->group_leader->comm, \"surfaceflinger\") ||\n"
       "\t     !strcmp(task->group_leader->comm, \"android.hardwar\") ||\n"
+      "\t     !strcmp(task->group_leader->comm, \"gpumbox_bridge\") ||\n"
       "\t     !strcmp(task->group_leader->comm, \"system_server\")) &&\n"
       "\t    (!strcmp(current->comm, \"crash_dump64\") ||\n"
       "\t     !strcmp(current->comm, \"crash_dump32\") ||\n"
@@ -1398,191 +1460,39 @@ patch("kernel/ptrace.c",
       "\t}\n",
       "ptrace 拒绝 crash_dump 冻结 SF/composer/system_server（watchdog 断链）")
 
-# (18) B2 v1 scanout 填色桥（run74 定案 → v61）：RT 填色全部成功（filled 与
-#      理论值吻合）但 VNC 全黑——全程仅 2 次 power-mode atomic commit、0 次
-#      frame present → virtio_gpu_update_dumb_bo（transfer_to_host_2d）与
-#      resource_flush 从未执行 → QEMU scanout 恒空。故不在 atom 侧等 HWC
-#      present，直接在内核侧把 primary fb 的 dumb BO 填纯色并走
-#      virtio_gpu_update_dumb_bo 同款上屏链（transfer_2d + flush + notify），
-#      打通并验证 guest→QEMU scanout 通路；真实 present 活跃期（plane
-#      update 2s 内，见 18d 时间戳）自动停填让位，避免覆盖真实内容。
-#      workqueue（500ms 自重排）执行：vmap 可睡眠，不能放 hrtimer softirq。
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "#include <drm/drm_atomic_helper.h>\n#include <drm/drm_vblank.h>\n",
-      "#include <drm/drm_atomic_helper.h>\n#include <drm/drm_vblank.h>\n"
-      "#include <drm/drm_framebuffer.h>\n"
-      "#include <drm/drm_gem_shmem_helper.h>\n",
-      "virtgpu_display.c include framebuffer+shmem helper（B2 填色桥）")
+# (18)-(20) 原内核填色桥已彻底移除，纯真呈现 Android 原生 SurfaceFlinger 真实画面
 
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "static const struct drm_crtc_funcs virtio_gpu_crtc_funcs = {\n"
-      "\t.set_config             = drm_atomic_helper_set_config,\n",
-      "/* CDH(gold-15): B2 v1 scanout 填色桥 —— run74：RT 填色成功但 0 次\n"
-      " * frame commit → transfer_2d/flush 从未执行 → QEMU scanout 恒空 →\n"
-      " * VNC 全黑。本桥把 primary fb 的 dumb BO 填纯色，走\n"
-      " * virtio_gpu_update_dumb_bo 同款上屏链；真实 present 活跃期停填让位。\n"
-      " */\n"
-      "static struct delayed_work cdh_fill_dwork;\n"
-      "static struct virtio_gpu_device *cdh_fill_vgdev;\n"
-      "unsigned long cdh_fill_last_plane_update;\n"
-      "static int cdh_fill_logs;\n"
-      "\n"
-      "static void cdh_scanout_fill_fn(struct work_struct *work)\n"
-      "{\n"
-      "\tstruct virtio_gpu_device *vgdev = cdh_fill_vgdev;\n"
-      "\tstruct drm_crtc *crtc;\n"
-      "\tstruct drm_framebuffer *fb;\n"
-      "\tstruct drm_gem_object *gobj;\n"
-      "\tstruct virtio_gpu_object *bo;\n"
-      "\tstruct virtio_gpu_object_array *objs;\n"
-      "\tstruct iosys_map map;\n"
-      "\tu32 pitch, height, cpp, i, y;\n"
-      "\n"
-      "\tif (!vgdev)\n"
-      "\t\tgoto rearm;\n"
-      "\n"
-      "\t/* 真实 present 活跃期（plane update 2s 内）停填让位 */\n"
-      "\tif (cdh_fill_last_plane_update &&\n"
-      "\t    time_before(jiffies, cdh_fill_last_plane_update + 2 * HZ))\n"
-      "\t\tgoto rearm;\n"
-      "\n"
-      "\tcrtc = cdh_vblank_crtc;\n"
-      "\tif (!crtc && !list_empty(&vgdev->ddev->mode_config.crtc_list))\n"
-      "\t\tcrtc = list_first_entry(&vgdev->ddev->mode_config.crtc_list,\n"
-      "\t\t\t\t\tstruct drm_crtc, head);\n"
-      "\tif (!crtc)\n"
-      "\t\tgoto rearm;\n"
-      "\n"
-      "\tdrm_modeset_lock(&crtc->mutex, NULL);\n"
-      "\tfb = crtc->primary->state ? crtc->primary->state->fb : NULL;\n"
-      "\tif (fb) {\n"
-      "\t\tdrm_framebuffer_get(fb);\n"
-      "\t\tgobj = fb->obj[0];\n"
-      "\t\tdrm_gem_object_get(gobj);\n"
-      "\t}\n"
-      "\tdrm_modeset_unlock(&crtc->mutex);\n"
-      "\tif (!fb)\n"
-      "\t\tgoto rearm;\n"
-      "\tif (!gobj) {\n"
-      "\t\tdrm_framebuffer_put(fb);\n"
-      "\t\tgoto rearm;\n"
-      "\t}\n"
-      "\n"
-      "\tbo = gem_to_virtio_gpu_obj(gobj);\n"
-      "\tif (!bo->dumb)\n"
-      "\t\tgoto put;\n"
-      "\tpitch = fb->pitches[0];\n"
-      "\theight = fb->height;\n"
-      "\tcpp = fb->format->cpp[0];\n"
-      "\n"
-      "\tif (drm_gem_shmem_vmap(&bo->base, &map))\n"
-      "\t\tgoto put;\n"
-      "\tfor (y = 0; y < height; y++) {\n"
-      "\t\tvoid *row = (char *)map.vaddr + (size_t)y * pitch;\n"
-      "\n"
-      "\t\tif (cpp == 4) {\n"
-      "\t\t\tu32 *p = row;\n"
-      "\n"
-      "\t\t\tfor (i = 0; i < pitch / 4; i++)\n"
-      "\t\t\t\tp[i] = 0xFF00FF00; /* XRGB8888 绿 */\n"
-      "\t\t} else if (cpp == 2) {\n"
-      "\t\t\tu16 *p = row;\n"
-      "\n"
-      "\t\t\tfor (i = 0; i < pitch / 2; i++)\n"
-      "\t\t\t\tp[i] = 0x07E0; /* RGB565 绿 */\n"
-      "\t\t} else {\n"
-      "\t\t\tmemset(row, 0x88, pitch);\n"
-      "\t\t}\n"
-      "\t}\n"
-      "\tdrm_gem_shmem_vunmap(&bo->base, &map);\n"
-      "\n"
-      "\t/* 与 virtio_gpu_update_dumb_bo 同款：transfer 矩形按 XRGB8888\n"
-      "\t * 宽=pitch/4 覆盖整个 BO 字节（补丁 8 的宿主资源映射约定） */\n"
-      "\tobjs = virtio_gpu_array_alloc(1);\n"
-      "\tif (objs) {\n"
-      "\t\tvirtio_gpu_array_add_obj(objs, gobj);\n"
-      "\t\tvirtio_gpu_cmd_transfer_to_host_2d(vgdev, 0, pitch / 4, height,\n"
-      "\t\t\t\t\t\t   0, 0, objs, NULL);\n"
-      "\t\tvirtio_gpu_cmd_resource_flush(vgdev, bo->hw_res_handle, 0, 0,\n"
-      "\t\t\t\t\t      pitch / 4, height, NULL, NULL);\n"
-      "\t\tvirtio_gpu_notify(vgdev);\n"
-      "\t}\n"
-      "\n"
-      "\tif (cdh_fill_logs < 4) {\n"
-      "\t\tcdh_fill_logs++;\n"
-      "\t\tDRM_INFO(\"cdh_fill: %ux%u pitch=%u cpp=%u handle=%u\\n\",\n"
-      "\t\t\t fb->width, height, pitch, cpp, bo->hw_res_handle);\n"
-      "\t}\n"
-      "put:\n"
-      "\tdrm_gem_object_put(gobj);\n"
-      "\tdrm_framebuffer_put(fb);\n"
-      "rearm:\n"
-      "\tschedule_delayed_work(&cdh_fill_dwork, msecs_to_jiffies(500));\n"
-      "}\n"
-      "\n"
-      "static const struct drm_crtc_funcs virtio_gpu_crtc_funcs = {\n"
-      "\t.set_config             = drm_atomic_helper_set_config,\n",
-      "virtgpu_display.c B2 v1 scanout 填色桥实现",
-      done="static void cdh_scanout_fill_fn")
+# (20b) virtgpu_drv.c: 注入 cdh_virtio_gpu_fops 与 cdh_mtk_unlocked_ioctl，并实现 fd 0 保护
+patch("drivers/gpu/drm/virtio/virtgpu_drv.c",
+      "#include <linux/module.h>\n",
+      "#include <linux/module.h>\n#include <linux/uaccess.h>\n#include <linux/file.h>\n#include <linux/fdtable.h>\n",
+      "virtgpu_drv.c include uaccess/file/fdtable",
+      done="#include <linux/fdtable.h>")
 
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\tcdh_vblank_timer.function = cdh_vblank_timer_fn;\n",
-      "\tcdh_vblank_timer.function = cdh_vblank_timer_fn;\n"
-      "\n"
-      "\t/* CDH(gold-15): B2 v1 scanout 填色桥（见 cdh_scanout_fill_fn） */\n"
-      "\tcdh_fill_vgdev = vgdev;\n"
-      "\tINIT_DELAYED_WORK(&cdh_fill_dwork, cdh_scanout_fill_fn);\n"
-      "\tschedule_delayed_work(&cdh_fill_dwork, msecs_to_jiffies(500));\n",
-      "virtgpu_display.c 填色桥 workqueue 启动",
-      done="INIT_DELAYED_WORK(&cdh_fill_dwork")
-
-# (18e) 6.6 签名修正：drm_gem_object_get() 返回 void（不是返回指针），(18) 首版
-#      写成 `gobj = drm_gem_object_get(...)` 编译失败。增量构建卷上 (18) 已按
-#      旧版落盘（done 标记命中跳过），故此处就地修正；全新树由 (18) 新版直接
-#      覆盖，本补丁经 done 标记跳过。
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\t\tgobj = drm_gem_object_get(fb->obj[0]);\n",
-      "\t\tgobj = fb->obj[0];\n"
-      "\t\tdrm_gem_object_get(gobj);\n",
-      "填色桥 drm_gem_object_get 返回 void 修正（6.6 签名）",
-      done="drm_gem_object_get(gobj);")
-
-# (18d) 填色桥让位判据：真实上屏活动时间戳。virtio_gpu_update_dumb_bo 是
-#      HWC frame present 的必经点（dumb BO 走 transfer_2d），在此打点最准。
-patch("drivers/gpu/drm/virtio/virtgpu_plane.c",
-      "#include \"virtgpu_drv.h\"\n",
-      "#include \"virtgpu_drv.h\"\n"
-      "\n"
-      "/* CDH(gold-15): 真实 present 活动时间戳，(18) scanout 填色桥据此停填让位 */\n"
-      "extern unsigned long cdh_fill_last_plane_update;\n",
-      "virtgpu_plane.c extern 填色桥让位时间戳")
-
-patch("drivers/gpu/drm/virtio/virtgpu_plane.c",
-      "\tuint32_t off = x * state->fb->format->cpp[0] +\n"
-      "\t\ty * state->fb->pitches[0];\n",
-      "\tuint32_t off = x * state->fb->format->cpp[0] +\n"
-      "\t\ty * state->fb->pitches[0];\n"
-      "\n"
-      "\t/* CDH(gold-15): 真实上屏（transfer_2d）前打时间戳，填色桥据此让位 */\n"
-      "\tcdh_fill_last_plane_update = jiffies;\n",
-      "virtgpu_plane.c 上屏活动时间戳打点")
-
-# (19) MTK 私有 DRM ioctl stub（run74 定案 → v61）。DRM_IOCTL_MTK_KICK_IDLE
-#      (0xc0186450, nr=0x50) 超出 virtgpu ioctl 表（0x01-0x0b）→ drm core
-#      err_i1，HWC VSyncThread 每 vsync 报 "DRM_IOCTL_MTK_KICK_IDLE failed"
-#      583 次 → enableHWVSync 失败 → SwitchConfigMonitor config-switch 事件
-#      卡死（monitorActiveThread timeout 刷屏、idx 恒定）→ present 链断。
-#      DRM_IOCTL_MTK_SET_MODE (0xc0046449) 与 DRM_VIRTGPU_GET_CAPS 撞 nr
-#      （index 9），drm_ioctl 按 nr 分发不校验 cmd → 误入 getcaps handler。
-#      故在 fops 层按完整 cmd 精确匹配 stub 成功，其余下放 drm_ioctl。
 patch("drivers/gpu/drm/virtio/virtgpu_drv.c",
       "DEFINE_DRM_GEM_FOPS(virtio_gpu_driver_fops);\n",
       "DEFINE_DRM_GEM_FOPS(virtio_gpu_driver_fops);\n"
       "\n"
-      "/* CDH(gold-15): MTK 私有 DRM ioctl stub（wire-kbase.sh (19)）。\n"
-      " * fops 层按完整 cmd 精确匹配（SET_MODE 与 GET_CAPS 撞 nr，drm_ioctl\n"
-      " * 按 nr 分发会误入 getcaps），命中即成功返回，其余下放 drm_ioctl。\n"
-      " */\n"
+      "/* CDH(gold-15): 占用未使用的 fd 0 防止 MTK HWC ionImport assert */\n"
+      "static int cdh_virtio_gpu_open(struct inode *inode, struct file *filp)\n"
+      "{\n"
+      "\tint fd0 = get_unused_fd_flags(0);\n"
+      "\tif (fd0 == 0) {\n"
+      "\t\tstruct file *null_filp = filp_open(\"/dev/null\", O_RDONLY, 0);\n"
+      "\t\tif (!IS_ERR(null_filp)) {\n"
+      "\t\t\tfd_install(0, null_filp);\n"
+      "\t\t\tpr_info(\"cdh_fd0: occupied fd 0 with /dev/null for %s (pid %d)\\n\",\n"
+      "\t\t\t\tcurrent->comm, current->pid);\n"
+      "\t\t} else {\n"
+      "\t\t\tput_unused_fd(0);\n"
+      "\t\t}\n"
+      "\t} else if (fd0 > 0) {\n"
+      "\t\tput_unused_fd(fd0);\n"
+      "\t}\n"
+      "\treturn drm_open(inode, filp);\n"
+      "}\n"
+      "\n"
+      "/* CDH(gold-15): MTK 私有 DRM ioctl stub */\n"
       "static long cdh_mtk_unlocked_ioctl(struct file *filp, unsigned int cmd,\n"
       "\t\t\t\t       unsigned long arg)\n"
       "{\n"
@@ -1598,165 +1508,25 @@ patch("drivers/gpu/drm/virtio/virtgpu_drv.c",
       "}\n"
       "\n"
       "static const struct file_operations cdh_virtio_gpu_fops = {\n"
-      "\t.owner\t\t= THIS_MODULE,\n"
-      "\t.open\t\t= drm_open,\n"
-      "\t.release\t= drm_release,\n"
-      "\t.unlocked_ioctl\t= cdh_mtk_unlocked_ioctl,\n"
-      "\t.compat_ioctl\t= drm_compat_ioctl,\n"
-      "\t.poll\t\t= drm_poll,\n"
-      "\t.read\t\t= drm_read,\n"
-      "\t.llseek\t\t= noop_llseek,\n"
-      "\t.mmap\t\t= drm_gem_mmap,\n"
+      "\t.owner		= THIS_MODULE,\n"
+      "\t.open		= cdh_virtio_gpu_open,\n"
+      "\t.release	= drm_release,\n"
+      "\t.unlocked_ioctl	= cdh_mtk_unlocked_ioctl,\n"
+      "\t.compat_ioctl	= drm_compat_ioctl,\n"
+      "\t.poll		= drm_poll,\n"
+      "\t.read		= drm_read,\n"
+      "\t.llseek		= noop_llseek,\n"
+      "\t.mmap		= drm_gem_mmap,\n"
       "};\n",
-      "virtgpu_drv.c MTK 私有 ioctl stub（fops 精确匹配）",
-      done="static long cdh_mtk_unlocked_ioctl")
+      "virtgpu_drv.c 定义 cdh_virtio_gpu_fops 和 cdh_mtk_unlocked_ioctl",
+      done="cdh_virtio_gpu_fops")
 
 patch("drivers/gpu/drm/virtio/virtgpu_drv.c",
       "\t.fops = &virtio_gpu_driver_fops,\n",
       "\t.fops = &cdh_virtio_gpu_fops,\n",
-      "virtgpu_drv.c fops 切到 MTK stub wrapper")
+      "virtgpu_drv.c 切换 driver.fops 到 cdh_virtio_gpu_fops",
+      done=".fops = &cdh_virtio_gpu_fops")
 
-# (20) v62：填色桥兜底强化（run75 判读）。run75 双桥落地后 cdh_fill 0 次日志、
-#      VNC 仍黑：填色桥静默跳过（疑 primary 无 fb 或 bo 非 dumb）；同轮发现真根因
-#      （见 (21)）——HWC 从未拿到 DRM master → atomic commit 全被拒 → 无 fb/无
-#      scanout。故 (20a) 无 fb 时自建兜底 fb、(20d-20f) 各静默跳过点打限速日志、
-#      (20e) 放宽 dumb 限制为仅跳过 host3d_blob、(20g) 填色前显式 set_scanout
-#      绑定 scanout（否则 QEMU 端资源未挂 scanout 不显示）。
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "/* CDH(gold-15): B2 v1 scanout 填色桥 —— run74：RT 填色成功但 0 次\n",
-      "/* CDH(gold-15): v62 自建兜底 fb —— HWC 无 primary fb（从未 commit）时\n"
-      " * 自建 dumb BO + framebuffer 供填色桥上屏验证（wire-kbase.sh (20a)）。 */\n"
-      "static struct virtio_gpu_framebuffer *cdh_fill_fb;\n"
-      "\n"
-      "static int virtio_gpu_framebuffer_init(struct drm_device *dev,\n"
-      "\t\t\t\t       struct virtio_gpu_framebuffer *vgfb,\n"
-      "\t\t\t\t       const struct drm_mode_fb_cmd2 *mode_cmd,\n"
-      "\t\t\t\t       struct drm_gem_object *obj);\n"
-      "\n"
-      "static int cdh_fill_make_fb(struct virtio_gpu_device *vgdev,\n"
-      "\t\t\t    struct drm_crtc *crtc)\n"
-      "{\n"
-      "\tstruct virtio_gpu_object_params params = { 0 };\n"
-      "\tstruct virtio_gpu_object *bo = NULL;\n"
-      "\tstruct virtio_gpu_framebuffer *vgfb;\n"
-      "\tstruct drm_mode_fb_cmd2 mode_cmd = { 0 };\n"
-      "\tu32 w = crtc->mode.hdisplay ? crtc->mode.hdisplay : 1080;\n"
-      "\tu32 h = crtc->mode.vdisplay ? crtc->mode.vdisplay : 2400;\n"
-      "\tint ret;\n"
-      "\n"
-      "\tparams.format = virtio_gpu_translate_format(DRM_FORMAT_HOST_XRGB8888);\n"
-      "\tparams.width = w;\n"
-      "\tparams.height = h;\n"
-      "\tparams.size = ALIGN((size_t)w * 4 * h, PAGE_SIZE);\n"
-      "\tparams.dumb = true;\n"
-      "\tif (vgdev->has_resource_blob && !vgdev->has_virgl_3d) {\n"
-      "\t\tparams.blob_mem = VIRTGPU_BLOB_MEM_GUEST;\n"
-      "\t\tparams.blob_flags = VIRTGPU_BLOB_FLAG_USE_SHAREABLE;\n"
-      "\t\tparams.blob = true;\n"
-      "\t}\n"
-      "\tret = virtio_gpu_object_create(vgdev, &params, &bo, NULL);\n"
-      "\tif (ret)\n"
-      "\t\treturn ret;\n"
-      "\tvgfb = kzalloc(sizeof(*vgfb), GFP_KERNEL);\n"
-      "\tif (!vgfb) {\n"
-      "\t\tdrm_gem_object_put(&bo->base.base);\n"
-      "\t\treturn -ENOMEM;\n"
-      "\t}\n"
-      "\tmode_cmd.width = w;\n"
-      "\tmode_cmd.height = h;\n"
-      "\tmode_cmd.pixel_format = DRM_FORMAT_HOST_XRGB8888;\n"
-      "\tmode_cmd.pitches[0] = w * 4;\n"
-      "\tret = virtio_gpu_framebuffer_init(vgdev->ddev, vgfb, &mode_cmd,\n"
-      "\t\t\t\t\t  &bo->base.base);\n"
-      "\tif (ret) {\n"
-      "\t\tkfree(vgfb);\n"
-      "\t\tdrm_gem_object_put(&bo->base.base);\n"
-      "\t\treturn ret;\n"
-      "\t}\n"
-      "\tcdh_fill_fb = vgfb;\n"
-      "\tpr_info(\"cdh_fill: self fb %ux%u ok\\n\", w, h);\n"
-      "\treturn 0;\n"
-      "}\n"
-      "\n"
-      "/* CDH(gold-15): B2 v1 scanout 填色桥 —— run74：RT 填色成功但 0 次\n",
-      "virtgpu_display.c 自建兜底 fb（无 primary fb 时）",
-      done="static int cdh_fill_make_fb")
-
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\tif (!vgdev)\n"
-      "\t\tgoto rearm;\n",
-      "\tif (!vgdev) {\n"
-      "\t\tpr_info_ratelimited(\"cdh_fill: bail no vgdev\\n\");\n"
-      "\t\tgoto rearm;\n"
-      "\t}\n",
-      "填色桥 bail 日志：no vgdev")
-
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\tif (!crtc)\n"
-      "\t\tgoto rearm;\n",
-      "\tif (!crtc) {\n"
-      "\t\tpr_info_ratelimited(\"cdh_fill: bail no crtc\\n\");\n"
-      "\t\tgoto rearm;\n"
-      "\t}\n",
-      "填色桥 bail 日志：no crtc")
-
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\tif (!fb)\n"
-      "\t\tgoto rearm;\n",
-      "\tif (!fb) {\n"
-      "\t\t/* HWC 从未 commit（primary 无 fb）→ 自建兜底 fb 上屏验证 */\n"
-      "\t\tif (!cdh_fill_fb && cdh_fill_make_fb(vgdev, crtc)) {\n"
-      "\t\t\tpr_info_ratelimited(\"cdh_fill: self fb fail\\n\");\n"
-      "\t\t\tgoto rearm;\n"
-      "\t\t}\n"
-      "\t\tfb = &cdh_fill_fb->base;\n"
-      "\t\tdrm_framebuffer_get(fb);\n"
-      "\t\tgobj = fb->obj[0];\n"
-      "\t\tdrm_gem_object_get(gobj);\n"
-      "\t}\n",
-      "填色桥 nofb → 自建兜底 fb")
-
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\tif (!bo->dumb)\n"
-      "\t\tgoto put;\n",
-      "\tif (bo->host3d_blob) {\n"
-      "\t\tpr_info_ratelimited(\"cdh_fill: skip host3d_blob\\n\");\n"
-      "\t\tgoto put;\n"
-      "\t}\n",
-      "填色桥放宽：仅跳过 host3d_blob")
-
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\tif (drm_gem_shmem_vmap(&bo->base, &map))\n"
-      "\t\tgoto put;\n",
-      "\tif (drm_gem_shmem_vmap(&bo->base, &map)) {\n"
-      "\t\tpr_info_ratelimited(\"cdh_fill: vmap fail\\n\");\n"
-      "\t\tgoto put;\n"
-      "\t}\n",
-      "填色桥 bail 日志：vmap fail")
-
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\tobjs = virtio_gpu_array_alloc(1);\n",
-      "\t/* 绑定 scanout：HWC 不 commit 时资源未挂 scanout，QEMU 不显示 */\n"
-      "\tvirtio_gpu_cmd_set_scanout(vgdev,\n"
-      "\t\t\t\t    drm_crtc_to_virtio_gpu_output(crtc)->index,\n"
-      "\t\t\t\t    bo->hw_res_handle, pitch / 4, height, 0, 0);\n"
-      "\tobjs = virtio_gpu_array_alloc(1);\n",
-      "填色桥 transfer 前 set_scanout 绑定")
-
-# (21) v62 核心：MTK master_info(0xc004644c) 真授权 DRM master。
-#      run74：该 ioctl 无 handler → err:-1 → "failed to get drm master info"
-#      → HWC 无 master → drm_mode_atomic_ioctl（DRM_MASTER 权限）全部被拒 →
-#      0 次 frame present → 0 次 set_scanout/transfer/flush → VNC 全黑。
-#      **黑屏一路的真正根因**。run75：stub 返回 0 但未真授权 → HWC 校验
-#      仍失败 → "failed to get drm master" 2180 万次无限重试（主线程死循环
-#      → system_server watchdog 65s 链）。真机 MTK 内核用该私有 ioctl 绕过
-#      drm_master_check_perm 的 CAP_SYS_ADMIN 检查授权 master，云机复刻：
-#      置位 was_master 放行权限检查 → drm_setmaster_ioctl 真授权 → 回写
-#      is_master=1。
-patch("drivers/gpu/drm/virtio/virtgpu_drv.c",
-      "#include <linux/module.h>\n",
-      "#include <linux/module.h>\n#include <linux/uaccess.h>\n",
-      "virtgpu_drv.c include uaccess（master_info payload 回写）")
 
 patch("drivers/gpu/drm/virtio/virtgpu_drv.c",
       "static long cdh_mtk_unlocked_ioctl(struct file *filp, unsigned int cmd,\n",
@@ -1840,26 +1610,7 @@ patch("drivers/gpu/drm/virtio/virtgpu_display.c",
       "virtgpu_display.c atomic_flush 消费 vblank 事件（修 flip_done 超时）",
       done="CDH(gold-15): 消费 atomic vblank 事件（修 flip_done 10s 超时）。")
 
-# v63 (23)：填色日志升级——按 fb 格式变化记录（辨认 run76 灰屏 fb）。
-patch("drivers/gpu/drm/virtio/virtgpu_display.c",
-      "\tif (cdh_fill_logs < 4) {\n"
-      "\t\tcdh_fill_logs++;\n"
-      "\t\tDRM_INFO(\"cdh_fill: %ux%u pitch=%u cpp=%u handle=%u\\n\",\n"
-      "\t\t\t fb->width, height, pitch, cpp, bo->hw_res_handle);\n"
-      "\t}\n",
-      "\t{\n"
-      "\t\tstatic u32 last_fmt;\n"
-      "\n"
-      "\t\tif (cdh_fill_logs < 20 && last_fmt != fb->format->format) {\n"
-      "\t\t\tlast_fmt = fb->format->format;\n"
-      "\t\t\tcdh_fill_logs++;\n"
-      "\t\t\tDRM_INFO(\"cdh_fill: %ux%u pitch=%u cpp=%u fmt=0x%x handle=%u\\n\",\n"
-      "\t\t\t\t fb->width, height, pitch, cpp, fb->format->format,\n"
-      "\t\t\t\t bo->hw_res_handle);\n"
-      "\t\t}\n"
-      "\t}\n",
-      "填色日志按 fb 格式变化记录（辨认灰屏 fb）",
-      done="cdh_fill_logs < 20")
+# (23) 填色日志已彻底移除
 
 # v63 (24)：default 臂未知 cmd 探针。run76 实锤 KICK_IDLE 从未命中
 # (19) 的 case 0xc0186450（0 次）→ 该 cmd 常量有误；记录实际 cmd 供
@@ -1915,6 +1666,83 @@ patch("drivers/gpu/drm/virtio/virtgpu_drv.c",
       "\t\tpr_info_ratelimited(\"cdh_mtk: stub ioctl cmd=0x%x\\n\", cmd);\n",
       "drv.c enableHWVSync 真 cmd 0xc0046456 修正",
       done="case 0xc0046456:")
+
+# v89 (26b)：拦截 MTK 私有 ioctl（尤其 DRM_IOCTL_MTK_GEM_SUBMIT 0xc0286442）。
+# run140 实锤（gpu.md §8 与 solution.md §36）：
+# 1. MTK HWC 提交帧时下发 DRM_IOCTL_MTK_GEM_SUBMIT(0xc0286442，nr=0x42)。
+# 2. 未被 cdh_mtk_unlocked_ioctl 拦截，落入 drm_ioctl，按 nr=0x42 命中
+#    DRM_IOCTL_VIRTGPU_EXECBUFFER(virtio_gpu_execbuffer_ioctl)！
+# 3. 驱动误将 MTK 40B 结构体当作 drm_virtgpu_execbuffer 提交给 virtio-gpu，
+#    导致后台 kworker virtio_gpu_dequeue_ctrl_func 释放时踩坏 SLUB 链表，
+#    触发 mm/slub.c:433 BUG! -> 整个系统在 t≈36.9s 必 panic 重启！
+# 4. 同步返回 -1，导致 HWC "[COMP] Failed to get releaseFence" ->
+#    SurfaceFlinger [SW-WD] <<[composite]>> timeout (4147ms) 挂死循环！
+# 5. 同时拦截 MTK 其他私有 ioctl (0xc00c6446, 0xc0046447 等)，严防误入
+#    VIRTGPU_TRANSFER_FROM_HOST / VIRTGPU_TRANSFER_TO_HOST。
+patch("drivers/gpu/drm/virtio/virtgpu_drv.c",
+      "\tcase 0xc0046456: /* DRM_IOCTL_MTK enableHWVSync 真 cmd（run78 反查\n"
+      "\t\t\t  * enableHWVSync：mov w1,#0x6456; movk #0xc004） */\n"
+      "\t\tpr_info_ratelimited(\"cdh_mtk: stub ioctl cmd=0x%x\\n\", cmd);\n"
+      "\t\treturn 0;\n",
+      "\tcase 0xc0046456: /* DRM_IOCTL_MTK enableHWVSync 真 cmd（run78 反查\n"
+      "\t\t\t  * enableHWVSync：mov w1,#0x6456; movk #0xc004） */\n"
+      "\t\tpr_info_ratelimited(\"cdh_mtk: stub ioctl cmd=0x%x\\n\", cmd);\n"
+      "\t\treturn 0;\n"
+      "\tcase 0xc0286442: /* DRM_IOCTL_MTK_GEM_SUBMIT (run140: 撞车 VIRTGPU_EXECBUFFER) */\n"
+      "\t\t{\n"
+      "\t\t\ts32 no_fence = -1;\n"
+      "\t\t\t(void)put_user(no_fence, (s32 __user *)(arg + 20));\n"
+      "\t\t\t(void)put_user(no_fence, (s32 __user *)(arg + 24));\n"
+      "\t\t}\n"
+      "\t\tpr_info_ratelimited(\"cdh_mtk: stub GEM_SUBMIT cmd=0x%x\\n\", cmd);\n"
+      "\t\treturn 0;\n"
+      "\tcase 0xc00c6446: /* DRM_IOCTL_MTK_CRTC_GETFENCE (gold-15: 撞车 VIRTGPU_TRANSFER_FROM_HOST，显式写 -1 规避 fd 0) */\n"
+      "\t\t{\n"
+      "\t\t\ts32 no_fence = -1;\n"
+      "\t\t\t(void)put_user(no_fence, (s32 __user *)(arg + 4));\n"
+      "\t\t}\n"
+      "\t\tpr_info_ratelimited(\"cdh_mtk: stub CRTC_GETFENCE cmd=0x%x\\n\", cmd);\n"
+      "\t\treturn 0;\n"
+      "\tcase 0xc0046447: /* MTK 私有 ioctl (撞车 VIRTGPU_TRANSFER_TO_HOST) */\n"
+      "\tcase 0xc004647e: /* MTK 私有 ioctl */\n"
+      "\tcase 0xc0286455: /* MTK 私有 ioctl */\n"
+      "\tcase 0xc00c6494: /* MTK 私有 ioctl */\n"
+      "\tcase 0xc040646d: /* MTK 私有 ioctl */\n"
+      "\tcase 0xc1286488: /* MTK 私有 ioctl */\n"
+      "\tcase 0xdc6c6486: /* MTK 私有 ioctl */\n"
+      "\t\tpr_info_ratelimited(\"cdh_mtk: stub ioctl cmd=0x%x\\n\", cmd);\n"
+      "\t\treturn 0;\n",
+      "drv.c 拦截 MTK GEM_SUBMIT 等私有 ioctl 防止误入 virtgpu 命令表",
+      done="stub CRTC_GETFENCE")
+
+# (26c) drm_atomic_uapi.c: 诊断日志——记录 atomic 提交与属性设置失败细节
+patch("drivers/gpu/drm/drm_atomic_uapi.c",
+      "\t\t\tret = drm_atomic_set_property(state, file_priv,\n"
+      "\t\t\t\t\t\t      obj, prop, prop_value);\n"
+      "\t\t\tif (ret) {\n",
+      "\t\t\tret = drm_atomic_set_property(state, file_priv,\n"
+      "\t\t\t\t\t\t      obj, prop, prop_value);\n"
+      "\t\t\tif (ret) {\n"
+      "\t\t\t\tpr_info_ratelimited(\"cdh_atomic_set_prop_err: obj=%u type=0x%x prop=%s(%u) val=%llu ret=%d by %s(%d)\\n\",\n"
+      "\t\t\t\t\t\t    obj->id, obj->type, prop->name, prop->base.id, prop_value, ret, current->comm, current->pid);\n",
+      "drm_atomic_uapi.c 属性设置失败诊断日志")
+
+patch("drivers/gpu/drm/drm_atomic_uapi.c",
+      "\tdrm_modeset_acquire_fini(&ctx);\n"
+      "\n"
+      "\treturn ret;\n"
+      "}\n",
+      "\tdrm_modeset_acquire_fini(&ctx);\n"
+      "\n"
+      "\tif (ret && ret != -EDEADLK)\n"
+      "\t\tpr_info_ratelimited(\"cdh_atomic_commit_err: ret=%d count_objs=%u flags=0x%x by %s (pid %d)\\n\",\n"
+      "\t\t\t\t    ret, arg->count_objs, arg->flags,\n"
+      "\t\t\t\t    current->comm, current->pid);\n"
+      "\treturn ret;\n"
+      "}\n",
+      "drm_atomic_uapi.c atomic commit 失败诊断日志")
+
+
 
 # v67 (27a)：path C 自死锁兜底——强制释放"已完成但事件未被取走"的 atom。
 # run79 终局定案（solution.md §17）：用户态事件线程（cmar"提交+消费"同线程）
@@ -2492,6 +2320,770 @@ patch("drivers/gpu/arm/midgard/backend/gpu/mali_kbase_model_dummy.c",
       "{\n",
       "model_dummy.c cdh_job_tick 回调（v74）",
       done="v74 到点补 tick——无寄存器访问时也推进 job 完成")
+
+# (28) B2 渲染桥 v2（guest 侧两件：内核 mailbox/像素写回 + 用户态桥 helper）。
+#      架构：kbase 提交 FS atom 时（(16d) 已解析 RT）把 Fragment shader 机器码
+#      经 /dev/cdh_gpumbox（bridge/cdh_gpumbox.c，wire 末尾拷入 drivers/dma-buf/）
+#      交给 guest helper（out/tmp/p2/gpumbox_bridge.c）→ /dev/hvc11 → host 渲染
+#      （out/tmp/p2/gpurender_host.py，va2spirv+MoltenVK）→ RP01 像素写回 RT
+#      并放行 job 完成；500ms 超时/失败走 (16d) 填色兜底（图层不动）。
+#      本组补丁只做 kbase 侧胶水（提取 shader、入队、hold/release job 完成），
+#      (16d) 填色语义原样保留作兜底；桥是增强路径，任何失败不 fail-loud。
+#      ABI/字节序见 bridge/cdh_gpumbox.h 头注释（与 gpurender_host.py 的
+#      ">4sIQIIIIIII"/">4sIIIII" 大端逐字段一致）。
+#
+# (28a) mali_kbase_jd.c：include + cdh_bridge_hold() extern 声明。
+patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
+      "#include <mali_kbase_caps.h>\n",
+      "#include <mali_kbase_caps.h>\n"
+      "\n"
+      "/* CDH(gold-15): B2 渲染桥（wire-kbase.sh (28a)）——mailbox ABI 见\n"
+      " * include/linux/cdh_gpumbox.h；cdh_bridge_hold() 定义在\n"
+      " * backend/gpu/mali_kbase_model_dummy.c（seq→slot hold 表，容量 8），\n"
+      " * job 激活时认领并把完成时刻推到 hold deadline。 */\n"
+      "#include <linux/cdh_gpumbox.h>\n"
+      "#include <linux/ktime.h>\n"
+      "\n"
+      "extern void cdh_bridge_hold(u32 seq, u64 jc, u64 deadline_ns);\n",
+      "B2 桥：jd.c include + cdh_bridge_hold extern 声明",
+      done="extern void cdh_bridge_hold(u32 seq, u64 jc, u64 deadline_ns);")
+
+# (28k) mali_kbase_jd.c：cdh_b2_extract_at() 公共提取辅助——判定 ptr
+#      直指 Shader Program（Descriptor Type=8, Stage=2 Fragment），取
+#      .Binary（kbase_vmap 折半 4096→128 + flow=end 定长）。(28h-b/c)/(28j) 共用。
+patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
+      "extern void cdh_bridge_hold(u32 seq, u64 jc, u64 deadline_ns);\n",
+      "extern void cdh_bridge_hold(u32 seq, u64 jc, u64 deadline_ns);\n"
+      "\n"
+      "/* CDH(gold-15): B2 桥 shader 提取辅助（wire-kbase.sh (28k)）。\n"
+      " * 判定 ptr 直指 Shader Program（Descriptor Type=8,\n"
+      " * Stage=2 Fragment），取 .Binary（GPU-exec 区 kbase_vmap 折半\n"
+      " * 4096→128，flow=end 定长）拷入 out（上限 4096B）。\n"
+      " * 返回 1=找到并拷出。 */\n"
+      "static int cdh_b2_extract_at(struct kbase_context *kctx, u64 ptr,\n"
+      "\t\t\t     u8 *out, u32 *out_len)\n"
+      "{\n"
+      "\tu8 sp[32];\n"
+      "\tu64 bin = 0;\n"
+      "\tconst u8 *code = NULL;\n"
+      "\tstruct kbase_vmap_struct bmap;\n"
+      "\tsize_t tlen, i, end = 0;\n"
+      "\n"
+      "\tif (ptr < 0x1000000ULL || ptr >= 0x10000000000ULL)\n"
+      "\t\treturn 0;\n"
+      "\tif (copy_from_user(sp, u64_to_user_ptr(ptr), sizeof(sp)))\n"
+      "\t\treturn 0;\n"
+      "\tif ((sp[0] & 0xf) != 8 || ((sp[0] >> 4) & 0xf) != 2)\n"
+      "\t\treturn 0;\n"
+      "\tmemcpy(&bin, sp + 0x08, 8);\n"
+      "\tif (!bin)\n"
+      "\t\treturn 0;\n"
+      "\tfor (tlen = 4096; tlen >= 128; tlen >>= 1) {\n"
+      "\t\tcode = kbase_vmap(kctx, bin, tlen, &bmap);\n"
+      "\t\tif (code)\n"
+      "\t\t\tbreak;\n"
+      "\t}\n"
+      "\tif (!code)\n"
+      "\t\treturn 0;\n"
+      "\tfor (i = 0; i + 8 <= tlen; i += 8) {\n"
+      "\t\tu64 w;\n"
+      "\n"
+      "\t\tmemcpy(&w, code + i, 8);\n"
+      "\t\tif (((w >> 59) & 0xf) == 15) {\n"
+      "\t\t\tend = i + 8;\n"
+      "\t\t\tbreak;\n"
+      "\t\t}\n"
+      "\t}\n"
+      "\t*out_len = (u32)(end ? end : tlen);\n"
+      "\tif (*out_len > 4096)\n"
+      "\t\t*out_len = 4096;\n"
+      "\tmemcpy(out, code, *out_len);\n"
+      "\tkbase_vunmap(kctx, &bmap);\n"
+      "\treturn 1;\n"
+      "}\n",
+      "B2 桥 shader 提取辅助 cdh_b2_extract_at（v78 (28k)）",
+      done="cdh_b2_extract_at(struct kbase_context *kctx")
+
+# (29) run136：事件出入队双点打点（限 64）——回答「32 个吞点是否来自被读的内核事件」
+#      （EV-GET 计数=交付数）+ 「udata 回显值对账」（blob0/blob1 值 vs DDK 提交值）。
+#      纯日志、无语义改动。
+patch("drivers/gpu/arm/midgard/mali_kbase_event.c",
+      "\t\tdev_dbg(kbdev->dev, \"Reporting %d events\\n\", event_count);\n",
+      "\t\tdev_dbg(kbdev->dev, \"Reporting %d events\\n\", event_count);\n"
+      "\t\t/* CDH(gold-15): (29) run136 事件入队打点（限 64，取证用） */\n"
+      "\t\t{\n"
+      "\t\t\tstatic atomic_t cdh_ev_add = ATOMIC_INIT(0);\n"
+      "\n"
+      "\t\t\tif (atomic_inc_return(&cdh_ev_add) <= 64)\n"
+      "\t\t\t\tdev_info(kbdev->dev,\n"
+      "\t\t\t\t\t \"cdh-mali: EV-ADD atom=%u code=0x%x blob0=0x%llx blob1=0x%llx\\n\",\n"
+      "\t\t\t\t\t kbase_jd_atom_id(kctx, atom), atom->event_code,\n"
+      "\t\t\t\t\t (unsigned long long)atom->udata.blob[0],\n"
+      "\t\t\t\t\t (unsigned long long)atom->udata.blob[1]);\n"
+      "\t\t}\n",
+      "run136 事件入队打点 EV-ADD（v81 (29a)）",
+      done="cdh-mali: EV-ADD atom=")
+
+patch("drivers/gpu/arm/midgard/mali_kbase_event.c",
+      "\tuevent->udata = kbase_event_process(kctx, atom);\n",
+      "\tuevent->udata = kbase_event_process(kctx, atom);\n"
+      "\t/* CDH(gold-15): (29) run136 事件出队打点（限 64）——交付数=EV-GET 计数 */\n"
+      "\t{\n"
+      "\t\tstatic atomic_t cdh_ev_get = ATOMIC_INIT(0);\n"
+      "\n"
+      "\t\tif (atomic_inc_return(&cdh_ev_get) <= 64)\n"
+      "\t\t\tdev_info(kctx->kbdev->dev,\n"
+      "\t\t\t\t \"cdh-mali: EV-GET atom=%u code=0x%x blob0=0x%llx blob1=0x%llx\\n\",\n"
+      "\t\t\t\t uevent->atom_number, uevent->event_code,\n"
+      "\t\t\t\t (unsigned long long)uevent->udata.blob[0],\n"
+      "\t\t\t\t (unsigned long long)uevent->udata.blob[1]);\n"
+      "\t}\n",
+      "run136 事件出队打点 EV-GET（v81 (29b)）",
+      done="cdh-mali: EV-GET atom=")
+
+# (28b) mali_kbase_model_dummy.c：include 桥 ABI 头。
+patch("drivers/gpu/arm/midgard/backend/gpu/mali_kbase_model_dummy.c",
+      "/* CDH(gold-15): v74 (27m) job 执行延迟模拟需要 ktime/workqueue */\n"
+      "#include <linux/ktime.h>\n"
+      "#include <linux/workqueue.h>\n",
+      "/* CDH(gold-15): v74 (27m) job 执行延迟模拟需要 ktime/workqueue */\n"
+      "#include <linux/ktime.h>\n"
+      "#include <linux/workqueue.h>\n"
+      "/* (28) B2 渲染桥 job hold/release 需要桥 ABI */\n"
+      "#include <linux/cdh_gpumbox.h>\n",
+      "model_dummy.c include cdh_gpumbox.h（v77 (28b)）",
+      done="(28) B2 渲染桥 job hold/release 需要桥 ABI")
+
+# (28c) model_dummy.c：B2 桥 hold 表 + 认领/门控/放行 + ops 注册胶水。
+#      插在 midgard_model_update() 之前（cdh_job_arm/cdh_dummy_model/
+#      CDH_JOB_LATENCY_NS 均已在 (27m) 就位且在其上文）。
+patch("drivers/gpu/arm/midgard/backend/gpu/mali_kbase_model_dummy.c",
+      "static void midgard_model_update(void *h)\n"
+      "{\n",
+      "/* CDH(gold-15): B2 渲染桥 job hold/release（wire-kbase.sh (28c)）——\n"
+      " * jd.c 提交 FS atom 入队成功后 cdh_bridge_hold(seq, jc, deadline) 登记\n"
+      " * pending（此刻 job 尚未进 slot）；job 激活（JS_COMMAND_NEXT=START 写）\n"
+      " * 时 cdh_bridge_claim(slot, current_jc) 认领（jc 匹配优先，否则最老\n"
+      " * 未认领项），完成时刻经 cdh_bridge_gate 推到 deadline（now+500ms\n"
+      " * 兜底）；桥响应/超时时 cdh_bridge_release_seq(seq) 把对应 slot 完成\n"
+      " * 时刻拉回 now+CDH_JOB_LATENCY_NS 并 cdh_job_arm() 补 tick（对齐\n"
+      " * (27m) 机制）。表容量 8，与 cdh_gpumbox.c 的 mailbox ring 对应。\n"
+      " * 锁序：hw_error_status.access_lock → cdh_bridge_map_lock。 */\n"
+      "#define CDH_BRIDGE_MAP_N 8\n"
+      "struct cdh_bridge_hold_ent {\n"
+      "\tu32 seq; /* 0=空闲 */\n"
+      "\tu64 jc;          /* FS atom 链首 jc，激活时认领匹配 */\n"
+      "\tu64 deadline_ns; /* 兜底完成时刻 */\n"
+      "\tint slot;        /* -1=未认领 */\n"
+      "};\n"
+      "static struct cdh_bridge_hold_ent cdh_bridge_map[CDH_BRIDGE_MAP_N];\n"
+      "static DEFINE_SPINLOCK(cdh_bridge_map_lock);\n"
+      "static u64 cdh_slot_hold_ns[NUM_SLOTS];\n"
+      "\n"
+      "void cdh_bridge_hold(u32 seq, u64 jc, u64 deadline_ns)\n"
+      "{\n"
+      "\tunsigned long flags;\n"
+      "\tint i, free_i = -1;\n"
+      "\n"
+      "\tspin_lock_irqsave(&cdh_bridge_map_lock, flags);\n"
+      "\tfor (i = 0; i < CDH_BRIDGE_MAP_N; i++) {\n"
+      "\t\tif (!cdh_bridge_map[i].seq) {\n"
+      "\t\t\tif (free_i < 0)\n"
+      "\t\t\t\tfree_i = i;\n"
+      "\t\t\tcontinue;\n"
+      "\t\t}\n"
+      "\t\tif (cdh_bridge_map[i].seq == seq) {\n"
+      "\t\t\tfree_i = i; /* 同 seq 覆盖旧项（防御性） */\n"
+      "\t\t\tbreak;\n"
+      "\t\t}\n"
+      "\t}\n"
+      "\tif (free_i >= 0) {\n"
+      "\t\tcdh_bridge_map[free_i].seq = seq;\n"
+      "\t\tcdh_bridge_map[free_i].jc = jc;\n"
+      "\t\tcdh_bridge_map[free_i].deadline_ns = deadline_ns;\n"
+      "\t\tcdh_bridge_map[free_i].slot = -1;\n"
+      "\t}\n"
+      "\tspin_unlock_irqrestore(&cdh_bridge_map_lock, flags);\n"
+      "}\n"
+      "\n"
+      "/* job 激活（START 写）时认领：jc 匹配优先，否则最老未认领项兜底 */\n"
+      "static void cdh_bridge_claim(int slot_idx, u64 jc)\n"
+      "{\n"
+      "\tint i, hit = -1, oldest = -1;\n"
+      "\n"
+      "\tspin_lock(&cdh_bridge_map_lock);\n"
+      "\tfor (i = 0; i < CDH_BRIDGE_MAP_N; i++) {\n"
+      "\t\tif (!cdh_bridge_map[i].seq || cdh_bridge_map[i].slot >= 0)\n"
+      "\t\t\tcontinue;\n"
+      "\t\tif (jc && cdh_bridge_map[i].jc == jc) {\n"
+      "\t\t\thit = i;\n"
+      "\t\t\tbreak;\n"
+      "\t\t}\n"
+      "\t\tif (oldest < 0)\n"
+      "\t\t\toldest = i;\n"
+      "\t}\n"
+      "\ti = (hit >= 0) ? hit : oldest;\n"
+      "\tif (i >= 0) {\n"
+      "\t\tcdh_bridge_map[i].slot = slot_idx;\n"
+      "\t\tcdh_slot_hold_ns[slot_idx] = cdh_bridge_map[i].deadline_ns;\n"
+      "\t}\n"
+      "\tspin_unlock(&cdh_bridge_map_lock);\n"
+      "}\n"
+      "\n"
+      "/* 完成时刻：正常 now+1ms；已认领 hold 则推到 deadline（(28)） */\n"
+      "static u64 cdh_bridge_gate(int slot_idx, u64 base_ns)\n"
+      "{\n"
+      "\tu64 hold = cdh_slot_hold_ns[slot_idx];\n"
+      "\n"
+      "\treturn hold > base_ns ? hold : base_ns;\n"
+      "}\n"
+      "\n"
+      "/* B2 桥放行：RP01 写回完成/超时时经 ops->release 调用 */\n"
+      "static void cdh_bridge_release_seq(u32 seq)\n"
+      "{\n"
+      "\tunsigned long flags, mflags;\n"
+      "\tint i, slot = -1;\n"
+      "\n"
+      "\tspin_lock_irqsave(&hw_error_status.access_lock, flags);\n"
+      "\tspin_lock_irqsave(&cdh_bridge_map_lock, mflags);\n"
+      "\tfor (i = 0; i < CDH_BRIDGE_MAP_N; i++) {\n"
+      "\t\tif (cdh_bridge_map[i].seq != seq)\n"
+      "\t\t\tcontinue;\n"
+      "\t\tslot = cdh_bridge_map[i].slot;\n"
+      "\t\tcdh_bridge_map[i].seq = 0;\n"
+      "\t\tcdh_bridge_map[i].jc = 0;\n"
+      "\t\tcdh_bridge_map[i].slot = -1;\n"
+      "\t\tbreak;\n"
+      "\t}\n"
+      "\tif (slot >= 0) {\n"
+      "\t\tcdh_slot_hold_ns[slot] = 0;\n"
+      "\t\tif (cdh_dummy_model)\n"
+      "\t\t\tcdh_dummy_model->slots[slot].cdh_done_ns =\n"
+      "\t\t\t\tktime_get_ns() + CDH_JOB_LATENCY_NS;\n"
+      "\t}\n"
+      "\tspin_unlock_irqrestore(&cdh_bridge_map_lock, mflags);\n"
+      "\tspin_unlock_irqrestore(&hw_error_status.access_lock, flags);\n"
+      "\tif (slot >= 0)\n"
+      "\t\tcdh_job_arm();\n"
+      "}\n"
+      "\n"
+      "static const struct cdh_bridge_ops cdh_bridge_ops_inst = {\n"
+      "\t.release = cdh_bridge_release_seq,\n"
+      "};\n"
+      "\n"
+      "void cdh_bridge_glue_init(void)\n"
+      "{\n"
+      "\tcdh_bridge_register_ops(&cdh_bridge_ops_inst);\n"
+      "\tpr_info(\"cdh-mali: B2 bridge glue ready\\n\");\n"
+      "}\n"
+      "\n"
+      "void cdh_bridge_glue_exit(void)\n"
+      "{\n"
+      "\tcdh_bridge_register_ops(NULL);\n"
+      "}\n"
+      "\n"
+      "static void midgard_model_update(void *h)\n"
+      "{\n",
+      "model_dummy.c B2 桥 hold 表 + 放行胶水（v77 (28c)）",
+      done="void cdh_bridge_glue_init(void)")
+
+# (28d) model_dummy.c：START 写（job 激活）认领 hold 并门控完成时刻。
+#      覆写 (27m)「START 写记时刻」插入文本（保留其 done 标记注释原文，
+#      保证 (27m) 幂等判定不受影响）。
+patch("drivers/gpu/arm/midgard/backend/gpu/mali_kbase_model_dummy.c",
+      "\t\t\t} else {\n"
+      "\t\t\t\tdummy->slots[slot_idx].job_active = 1;\n"
+      "\t\t\t\t/* CDH(gold-15): v74 记录最早完成时刻（模拟 job 执行耗时） */\n"
+      "\t\t\t\tdummy->slots[slot_idx].cdh_done_ns = ktime_get_ns() + CDH_JOB_LATENCY_NS;\n"
+      "\t\t\t\tcdh_job_arm();\n"
+      "\t\t\t}\n",
+      "\t\t\t} else {\n"
+      "\t\t\t\tdummy->slots[slot_idx].job_active = 1;\n"
+      "\t\t\t\t/* CDH(gold-15): v74 记录最早完成时刻（模拟 job 执行耗时）\n"
+      "\t\t\t\t * (28d) 认领 B2 桥 hold：job 激活才知 slot，hold 在此\n"
+      "\t\t\t\t * 落到对应 slot，完成时刻推到 deadline（now+500ms 兜底） */\n"
+      "\t\t\t\tcdh_bridge_claim(slot_idx, hw_error_status.current_jc);\n"
+      "\t\t\t\tdummy->slots[slot_idx].cdh_done_ns = cdh_bridge_gate(slot_idx, ktime_get_ns() + CDH_JOB_LATENCY_NS);\n"
+      "\t\t\t\tcdh_job_arm();\n"
+      "\t\t\t}\n",
+      "model_dummy.c START 写认领 hold + 门控（v77 (28d)）",
+      done="(28d) 认领 B2 桥 hold")
+
+# (28e) model_dummy.c：链式 job 晋升同样经门控取 hold deadline。
+patch("drivers/gpu/arm/midgard/backend/gpu/mali_kbase_model_dummy.c",
+      "\t\tif (dummy->slots[i].job_active) {\n"
+      "\t\t\t/* CDH(gold-15): v74 链式 job 同样按执行耗时延迟完成 */\n"
+      "\t\t\tdummy->slots[i].cdh_done_ns = ktime_get_ns() + CDH_JOB_LATENCY_NS;\n"
+      "\t\t\tcdh_job_arm();\n",
+      "\t\tif (dummy->slots[i].job_active) {\n"
+      "\t\t\t/* CDH(gold-15): v74 链式 job 同样按执行耗时延迟完成\n"
+      "\t\t\t * (28e) 已认领的 B2 桥 hold 优先（认领发生在入队写时） */\n"
+      "\t\t\tdummy->slots[i].cdh_done_ns = cdh_bridge_gate(i, ktime_get_ns() + CDH_JOB_LATENCY_NS);\n"
+      "\t\t\tcdh_job_arm();\n",
+      "model_dummy.c 晋升门控 hold（v77 (28e)）",
+      done="(28e) 已认领的 B2 桥 hold 优先")
+
+# (28f) model_dummy.c：job 入队（job_queued=1）即认领——该写时 jc 有效
+#      （JS_HEAD_NEXT 刚写完），晋升激活时经 cdh_bridge_gate 取到 deadline。
+patch("drivers/gpu/arm/midgard/backend/gpu/mali_kbase_model_dummy.c",
+      "\t\t\t\tdummy->slots[slot_idx].job_queued = 1;\n",
+      "\t\t\t\tdummy->slots[slot_idx].job_queued = 1;\n"
+      "\t\t\t\t/* CDH(gold-15): (28f) 入队即认领（jc 在 START 写时有效，\n"
+      "\t\t\t\t * current_jc 即本 job 链首），晋升时经 cdh_bridge_gate\n"
+      "\t\t\t\t * 取到 hold deadline */\n"
+      "\t\t\t\tcdh_bridge_claim(slot_idx, hw_error_status.current_jc);\n",
+      "model_dummy.c 入队认领 hold（v77 (28f)）",
+      done="(28f) 入队即认领")
+
+# (28g) mali_kbase_core_linux.c：模块 init/exit 注册/注销桥放行回调。
+patch("drivers/gpu/arm/midgard/mali_kbase_core_linux.c",
+      "static int __init kbase_driver_init(void)\n"
+      "{\n"
+      "\tint ret;\n",
+      "/* CDH(gold-15): B2 渲染桥 kbase 侧胶水（wire-kbase.sh (28g)）——\n"
+      " * cdh_bridge_glue_* 定义在 backend/gpu/mali_kbase_model_dummy.c */\n"
+      "extern void cdh_bridge_glue_init(void);\n"
+      "extern void cdh_bridge_glue_exit(void);\n"
+      "\n"
+      "static int __init kbase_driver_init(void)\n"
+      "{\n"
+      "\tint ret;\n"
+      "\n"
+      "\t/* B2 桥：注册放行回调（release(seq) 把 job 完成时刻拉回 now+1ms） */\n"
+      "\tcdh_bridge_glue_init();\n",
+      "core_linux.c B2 桥 glue init（v77 (28g)）",
+      done="extern void cdh_bridge_glue_init(void);")
+patch("drivers/gpu/arm/midgard/mali_kbase_core_linux.c",
+      "static void __exit kbase_driver_exit(void)\n"
+      "{\n"
+      "\tplatform_driver_unregister(&kbase_platform_driver);\n",
+      "static void __exit kbase_driver_exit(void)\n"
+      "{\n"
+      "\tcdh_bridge_glue_exit();\n"
+      "\tplatform_driver_unregister(&kbase_platform_driver);\n",
+      "core_linux.c B2 桥 glue exit（v77 (28g)）",
+      done="\tcdh_bridge_glue_exit();")
+
+# (28h) mali_kbase_jd.c：FS atom 提交桥接（(16d) type==9 块内、填色日志后
+#      追加，填色语义不动仍作兜底）。shader 提取仿 (19) chase：沿 job 链取
+#      Shader Environment → Shader Program(type=8,stage=2) → .Binary，
+#      kbase_vmap 折半取（4096→128），长度用 (19) 的 flow=end 遍历法；
+#      提取失败/队满只记日志（限 16 次），兜底图层直接生效。
+patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
+      "\t\t\t\t\t\t\t cdh_w0, cdh_w2, cdh_filled);\n"
+      "\t\t\t\t}\n"
+      "cdh_next_job:\n",
+      "\t\t\t\t\t\t\t cdh_w0, cdh_w2, cdh_filled);\n"
+      "\t\t\t\t\t/* CDH: B2 v2 渲染桥（wire-kbase.sh (28h)）——(16d) 填色\n"
+      "\t\t\t\t\t * 保留作兜底图层（先填，桥渲结果随后覆盖）；shader\n"
+      "\t\t\t\t\t * 提取失败/队满时兜底图层直接生效：桥是增强路径，\n"
+      "\t\t\t\t\t * 不 fail-loud 整个 submit。入队成功登记 pending hold，\n"
+      "\t\t\t\t\t * job 激活认领时完成时刻推到 now+500ms 兜底（(28c-d)）。 */\n"
+      "\t\t\t\t\tdo {\n"
+      "\t\t\t\t\t\tstatic u8 cdh_b2_shbuf[4096];\n"
+      "\t\t\t\t\t\tstatic u8 cdh_b2_job[384];\n"
+      "\t\t\t\t\t\tstatic atomic_t cdh_b2_seq = ATOMIC_INIT(0);\n"
+      "\t\t\t\t\t\tstatic atomic_t cdh_b2_probe = ATOMIC_INIT(0);\n"
+      "\t\t\t\t\t\tu64 cdh_b2_j = cdh_real_jc;\n"
+      "\t\t\t\t\t\tu32 cdh_b2_n, cdh_b2_slen = 0;\n"
+      "\t\t\t\t\t\tu64 cdh_b2_pay = 0, cdh_b2_fbd = 0;\n"
+      "\n"
+      "\t\t\t\t\t\tfor (cdh_b2_n = 0;\n"
+      "\t\t\t\t\t\t     cdh_b2_n < 8 && cdh_b2_j && !cdh_b2_slen;\n"
+      "\t\t\t\t\t\t     cdh_b2_n++) {\n"
+      "\t\t\t\t\t\t\tu64 cdh_b2_envs[3];\n"
+      "\t\t\t\t\t\t\tu64 cdh_b2_next;\n"
+      "\t\t\t\t\t\t\tu32 cdh_b2_hdr, cdh_b2_type;\n"
+      "\t\t\t\t\t\t\tu32 cdh_b2_ne = 0, cdh_b2_e;\n"
+      "\n"
+      "\t\t\t\t\t\t\tif (copy_from_user(cdh_b2_job,\n"
+      "\t\t\t\t\t\t\t\t\t   u64_to_user_ptr(cdh_b2_j),\n"
+      "\t\t\t\t\t\t\t\t\t   sizeof(cdh_b2_job)))\n"
+      "\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\tmemcpy(&cdh_b2_hdr, cdh_b2_job + 0x10, 4);\n"
+      "\t\t\t\t\t\t\tmemcpy(&cdh_b2_next, cdh_b2_job + 0x18, 8);\n"
+      "\t\t\t\t\t\t\tcdh_b2_type = (cdh_b2_hdr >> 1) & 0x7f;\n"
+      "\t\t\t\t\t\t\t/* Shader Environment 候选（(19) 布局）：Compute\n"
+      "\t\t\t\t\t\t\t * env@+0x40、Tiler DCD@128→env@128+0x40、\n"
+      "\t\t\t\t\t\t\t * MallocVertex env@256/320；Fragment Job 无内嵌\n"
+      "\t\t\t\t\t\t\t * env，payload@+0x20 可能指外置 env（任务书\n"
+      "\t\t\t\t\t\t\t * 「Fragment Job → shader env」）。 */\n"
+      "\t\t\t\t\t\t\tif (cdh_b2_type == 4) {\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_envs[cdh_b2_ne++] = cdh_b2_j + 0x40;\n"
+      "\t\t\t\t\t\t\t} else if (cdh_b2_type == 7) {\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_envs[cdh_b2_ne++] =\n"
+      "\t\t\t\t\t\t\t\t\tcdh_b2_j + 128 + 0x40;\n"
+      "\t\t\t\t\t\t\t} else if (cdh_b2_type == 11) {\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_envs[cdh_b2_ne++] = cdh_b2_j + 256;\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_envs[cdh_b2_ne++] = cdh_b2_j + 320;\n"
+      "\t\t\t\t\t\t\t} else if (cdh_b2_type == 9) {\n"
+      "\t\t\t\t\t\t\t\tmemcpy(&cdh_b2_pay, cdh_b2_job + 0x20, 8);\n"
+      "\t\t\t\t\t\t\t\tmemcpy(&cdh_b2_fbd, cdh_b2_job + 0x28, 8);\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_fbd &= ~0x3fULL;\n"
+      "\t\t\t\t\t\t\t\tif (cdh_b2_pay >= 0x1000000ULL &&\n"
+      "\t\t\t\t\t\t\t\t    cdh_b2_pay < 0x10000000000ULL)\n"
+      "\t\t\t\t\t\t\t\t\tcdh_b2_envs[cdh_b2_ne++] =\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_b2_pay;\n"
+      "\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\tfor (cdh_b2_e = 0;\n"
+      "\t\t\t\t\t\t\t     cdh_b2_e < cdh_b2_ne && !cdh_b2_slen;\n"
+      "\t\t\t\t\t\t\t     cdh_b2_e++) {\n"
+      "\t\t\t\t\t\t\t\tstruct kbase_vmap_struct cdh_b2_bmap;\n"
+      "\t\t\t\t\t\t\t\tconst u8 *cdh_b2_code = NULL;\n"
+      "\t\t\t\t\t\t\t\tu64 cdh_b2_sh = 0, cdh_b2_bin = 0;\n"
+      "\t\t\t\t\t\t\t\tu8 cdh_b2_sp[32];\n"
+      "\t\t\t\t\t\t\t\tsize_t cdh_b2_try, cdh_b2_i;\n"
+      "\t\t\t\t\t\t\t\tsize_t cdh_b2_end = 0;\n"
+      "\t\t\t\t\t\t\t\tu32 cdh_b2_len;\n"
+      "\n"
+      "\t\t\t\t\t\t\t\tif (copy_from_user(\n"
+      "\t\t\t\t\t\t\t\t\t\t&cdh_b2_sh,\n"
+      "\t\t\t\t\t\t\t\t\t\tu64_to_user_ptr(cdh_b2_envs[cdh_b2_e] +\n"
+      "\t\t\t\t\t\t\t\t\t\t\t\t0x28),\n"
+      "\t\t\t\t\t\t\t\t\t\tsizeof(cdh_b2_sh)) || !cdh_b2_sh)\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\tif (copy_from_user(cdh_b2_sp,\n"
+      "\t\t\t\t\t\t\t\t\t\t   u64_to_user_ptr(cdh_b2_sh),\n"
+      "\t\t\t\t\t\t\t\t\t\t   sizeof(cdh_b2_sp)))\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\t/* Descriptor Type=8(Shader)、Stage=2(Fragment) */\n"
+      "\t\t\t\t\t\t\t\tif ((cdh_b2_sp[0] & 0xf) != 8 ||\n"
+      "\t\t\t\t\t\t\t\t    ((cdh_b2_sp[0] >> 4) & 0xf) != 2)\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\tmemcpy(&cdh_b2_bin, cdh_b2_sp + 0x08, 8);\n"
+      "\t\t\t\t\t\t\t\tif (!cdh_b2_bin)\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\t/* .Binary 在 GPU-exec 区：kbase_vmap 折半取\n"
+      "\t\t\t\t\t\t\t\t * （4096→128，越界自动降长，同 (19)） */\n"
+      "\t\t\t\t\t\t\t\tfor (cdh_b2_try = 4096; cdh_b2_try >= 128;\n"
+      "\t\t\t\t\t\t\t\t     cdh_b2_try >>= 1) {\n"
+      "\t\t\t\t\t\t\t\t\tcdh_b2_code = kbase_vmap(\n"
+      "\t\t\t\t\t\t\t\t\t\tkctx, cdh_b2_bin,\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_b2_try, &cdh_b2_bmap);\n"
+      "\t\t\t\t\t\t\t\t\tif (cdh_b2_code)\n"
+      "\t\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\tif (!cdh_b2_code)\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\t/* (19) flow=end 遍历法定长 */\n"
+      "\t\t\t\t\t\t\t\tfor (cdh_b2_i = 0;\n"
+      "\t\t\t\t\t\t\t\t     cdh_b2_i + 8 <= cdh_b2_try;\n"
+      "\t\t\t\t\t\t\t\t     cdh_b2_i += 8) {\n"
+      "\t\t\t\t\t\t\t\t\tu64 cdh_b2_w;\n"
+      "\n"
+      "\t\t\t\t\t\t\t\t\tmemcpy(&cdh_b2_w,\n"
+      "\t\t\t\t\t\t\t\t\t       cdh_b2_code + cdh_b2_i, 8);\n"
+      "\t\t\t\t\t\t\t\t\tif (((cdh_b2_w >> 59) & 0xf) == 15) {\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_b2_end = cdh_b2_i + 8;\n"
+      "\t\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_len = (u32)(cdh_b2_end ?\n"
+      "\t\t\t\t\t\t\t\t\t\t  cdh_b2_end : cdh_b2_try);\n"
+      "\t\t\t\t\t\t\t\tif (cdh_b2_len > sizeof(cdh_b2_shbuf))\n"
+      "\t\t\t\t\t\t\t\t\tcdh_b2_len = sizeof(cdh_b2_shbuf);\n"
+      "\t\t\t\t\t\t\t\tmemcpy(cdh_b2_shbuf, cdh_b2_code, cdh_b2_len);\n"
+      "\t\t\t\t\t\t\t\tkbase_vunmap(kctx, &cdh_b2_bmap);\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_slen = cdh_b2_len;\n"
+      "\t\t\t\t\t\t\t\tif (atomic_inc_return(&cdh_b2_probe) <= 16)\n"
+      "\t\t\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
+      "\t\t\t\t\t\t\t\t\t\t \"cdh-mali: B2 bridge shader jc=0x%llx type=%u bin=0x%llx len=%u end=%zu\\n\",\n"
+      "\t\t\t\t\t\t\t\t\t\t cdh_b2_j, cdh_b2_type,\n"
+      "\t\t\t\t\t\t\t\t\t\t cdh_b2_bin, cdh_b2_slen,\n"
+      "\t\t\t\t\t\t\t\t\t\t cdh_b2_end);\n"
+      "\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t/* (28h-b) 通用有界指针追踪（(19) chase 同款）：\n"
+      "\t\t\t\t\t\t\t * 扫 job 缓冲 8B 对齐字，直指 Shader Program\n"
+      "\t\t\t\t\t\t\t * （Descriptor Type=8, Stage=2 Fragment）即取\n"
+      "\t\t\t\t\t\t\t * .Binary。实证：真机 FS 链 fragment shader 指针\n"
+      "\t\t\t\t\t\t\t * 落 +0xe8 等非固定 env 位（run100 对照 P3 chase\n"
+      "\t\t\t\t\t\t\t * 日志逐条吻合），固定 env 候选全不中。 */\n"
+      "\t\t\t\t\t\t\tfor (cdh_b2_e = 0;\n"
+      "\t\t\t\t\t\t\t     cdh_b2_e + 8 <= sizeof(cdh_b2_job) &&\n"
+      "\t\t\t\t\t\t\t     !cdh_b2_slen;\n"
+      "\t\t\t\t\t\t\t     cdh_b2_e += 8) {\n"
+      "\t\t\t\t\t\t\t\tstruct kbase_vmap_struct cdh_b2_bmap;\n"
+      "\t\t\t\t\t\t\t\tconst u8 *cdh_b2_code = NULL;\n"
+      "\t\t\t\t\t\t\t\tu64 cdh_b2_v = 0, cdh_b2_bin = 0;\n"
+      "\t\t\t\t\t\t\t\tu8 cdh_b2_sp[32];\n"
+      "\t\t\t\t\t\t\t\tsize_t cdh_b2_try, cdh_b2_i;\n"
+      "\t\t\t\t\t\t\t\tsize_t cdh_b2_end = 0;\n"
+      "\t\t\t\t\t\t\t\tu32 cdh_b2_len;\n"
+      "\n"
+      "\t\t\t\t\t\t\t\tmemcpy(&cdh_b2_v, cdh_b2_job + cdh_b2_e, 8);\n"
+      "\t\t\t\t\t\t\t\tif (cdh_b2_v < 0x1000000ULL ||\n"
+      "\t\t\t\t\t\t\t\t    cdh_b2_v >= 0x10000000000ULL)\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\tif (copy_from_user(cdh_b2_sp,\n"
+      "\t\t\t\t\t\t\t\t\t\t   u64_to_user_ptr(cdh_b2_v),\n"
+      "\t\t\t\t\t\t\t\t\t\t   sizeof(cdh_b2_sp)))\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\tif ((cdh_b2_sp[0] & 0xf) != 8 ||\n"
+      "\t\t\t\t\t\t\t\t    ((cdh_b2_sp[0] >> 4) & 0xf) != 2)\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\tmemcpy(&cdh_b2_bin, cdh_b2_sp + 0x08, 8);\n"
+      "\t\t\t\t\t\t\t\tif (!cdh_b2_bin)\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\tfor (cdh_b2_try = 4096; cdh_b2_try >= 128;\n"
+      "\t\t\t\t\t\t\t\t     cdh_b2_try >>= 1) {\n"
+      "\t\t\t\t\t\t\t\t\tcdh_b2_code = kbase_vmap(\n"
+      "\t\t\t\t\t\t\t\t\t\tkctx, cdh_b2_bin,\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_b2_try, &cdh_b2_bmap);\n"
+      "\t\t\t\t\t\t\t\t\tif (cdh_b2_code)\n"
+      "\t\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\tif (!cdh_b2_code)\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\tfor (cdh_b2_i = 0;\n"
+      "\t\t\t\t\t\t\t\t     cdh_b2_i + 8 <= cdh_b2_try;\n"
+      "\t\t\t\t\t\t\t\t     cdh_b2_i += 8) {\n"
+      "\t\t\t\t\t\t\t\t\tu64 cdh_b2_w;\n"
+      "\n"
+      "\t\t\t\t\t\t\t\t\tmemcpy(&cdh_b2_w,\n"
+      "\t\t\t\t\t\t\t\t\t       cdh_b2_code + cdh_b2_i, 8);\n"
+      "\t\t\t\t\t\t\t\t\tif (((cdh_b2_w >> 59) & 0xf) == 15) {\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_b2_end = cdh_b2_i + 8;\n"
+      "\t\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_len = (u32)(cdh_b2_end ?\n"
+      "\t\t\t\t\t\t\t\t\t\t  cdh_b2_end : cdh_b2_try);\n"
+      "\t\t\t\t\t\t\t\tif (cdh_b2_len > sizeof(cdh_b2_shbuf))\n"
+      "\t\t\t\t\t\t\t\t\tcdh_b2_len = sizeof(cdh_b2_shbuf);\n"
+      "\t\t\t\t\t\t\t\tmemcpy(cdh_b2_shbuf, cdh_b2_code, cdh_b2_len);\n"
+      "\t\t\t\t\t\t\t\tkbase_vunmap(kctx, &cdh_b2_bmap);\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_slen = cdh_b2_len;\n"
+      "\t\t\t\t\t\t\t\tif (atomic_inc_return(&cdh_b2_probe) <= 16)\n"
+      "\t\t\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
+      "\t\t\t\t\t\t\t\t\t\t \"cdh-mali: B2 bridge shader chase +0x%x jc=0x%llx bin=0x%llx len=%u end=%zu\\n\",\n"
+      "\t\t\t\t\t\t\t\t\t\t cdh_b2_e, cdh_b2_j,\n"
+      "\t\t\t\t\t\t\t\t\t\t cdh_b2_bin, cdh_b2_slen,\n"
+      "\t\t\t\t\t\t\t\t\t\t cdh_b2_end);\n"
+      "\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\tcdh_b2_j = cdh_b2_next;\n"
+      "\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t/* (28h-c) payload/FBD 广度追逐（种子+二级，容量\n"
+      "\t\t\t\t\t\t * 12）+ 捕获缓存兜底：FS 链为单 type=9 job、链上\n"
+      "\t\t\t\t\t\t * 追不到 fragment shader（(19) 注释定案=落 Tiler\n"
+      "\t\t\t\t\t\t * Job DCD，run102 实证 FS 时点全 skip）→ ① payload\n"
+      "\t\t\t\t\t\t * @+0x20 / FBD 两种子 BFS 找 stage-2 直指；② 仍无\n"
+      "\t\t\t\t\t\t * →取 (28j) Tiler atom 捕获缓存（同 tgid，2s）。 */\n"
+      "\t\t\t\t\t\tif (!cdh_b2_slen && (cdh_b2_pay || cdh_b2_fbd)) {\n"
+      "\t\t\t\t\t\t\tu64 cdh_b2_seeds[12];\n"
+      "\t\t\t\t\t\t\tu32 cdh_b2_ns = 0, cdh_b2_si;\n"
+      "\n"
+      "\t\t\t\t\t\t\tif (cdh_b2_pay)\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_seeds[cdh_b2_ns++] = cdh_b2_pay;\n"
+      "\t\t\t\t\t\t\tif (cdh_b2_fbd)\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_seeds[cdh_b2_ns++] = cdh_b2_fbd;\n"
+      "\t\t\t\t\t\t\tfor (cdh_b2_si = 0;\n"
+      "\t\t\t\t\t\t\t     cdh_b2_si < cdh_b2_ns && !cdh_b2_slen &&\n"
+      "\t\t\t\t\t\t\t     cdh_b2_ns < 12;) {\n"
+      "\t\t\t\t\t\t\t\tu8 cdh_b2_reg[256];\n"
+      "\t\t\t\t\t\t\t\tu64 cdh_b2_seed =\n"
+      "\t\t\t\t\t\t\t\t\tcdh_b2_seeds[cdh_b2_si++];\n"
+      "\t\t\t\t\t\t\t\tu32 cdh_b2_ri;\n"
+      "\n"
+      "\t\t\t\t\t\t\t\tif (copy_from_user(cdh_b2_reg,\n"
+      "\t\t\t\t\t\t\t\t\t\t   u64_to_user_ptr(cdh_b2_seed),\n"
+      "\t\t\t\t\t\t\t\t\t\t   sizeof(cdh_b2_reg)))\n"
+      "\t\t\t\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\t\t\t\tfor (cdh_b2_ri = 0;\n"
+      "\t\t\t\t\t\t\t\t     cdh_b2_ri + 8 <= sizeof(cdh_b2_reg) &&\n"
+      "\t\t\t\t\t\t\t\t     !cdh_b2_slen;\n"
+      "\t\t\t\t\t\t\t\t     cdh_b2_ri += 8) {\n"
+      "\t\t\t\t\t\t\t\t\tu64 cdh_b2_rv = 0;\n"
+      "\n"
+      "\t\t\t\t\t\t\t\t\tmemcpy(&cdh_b2_rv,\n"
+      "\t\t\t\t\t\t\t\t\t       cdh_b2_reg + cdh_b2_ri, 8);\n"
+      "\t\t\t\t\t\t\t\t\tif (cdh_b2_extract_at(kctx, cdh_b2_rv,\n"
+      "\t\t\t\t\t\t\t\t\t\t\t  cdh_b2_shbuf,\n"
+      "\t\t\t\t\t\t\t\t\t\t\t  &cdh_b2_slen)) {\n"
+      "\t\t\t\t\t\t\t\t\t\tif (atomic_inc_return(&cdh_b2_probe) <=\n"
+      "\t\t\t\t\t\t\t\t\t\t    16)\n"
+      "\t\t\t\t\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
+      "\t\t\t\t\t\t\t\t\t\t\t\t \"cdh-mali: B2 bridge shader seed=0x%llx off=+0x%x jc=0x%llx len=%u\\n\",\n"
+      "\t\t\t\t\t\t\t\t\t\t\t\t cdh_b2_seed,\n"
+      "\t\t\t\t\t\t\t\t\t\t\t\t cdh_b2_ri, cdh_real_jc,\n"
+      "\t\t\t\t\t\t\t\t\t\t\t\t cdh_b2_slen);\n"
+      "\t\t\t\t\t\t\t\t\t\tbreak;\n"
+      "\t\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t\t\tif (cdh_b2_rv >= 0x1000000ULL &&\n"
+      "\t\t\t\t\t\t\t\t\t    cdh_b2_rv < 0x10000000000ULL &&\n"
+      "\t\t\t\t\t\t\t\t\t    cdh_b2_ns < 12)\n"
+      "\t\t\t\t\t\t\t\t\t\tcdh_b2_seeds[cdh_b2_ns++] =\n"
+      "\t\t\t\t\t\t\t\t\t\t\tcdh_b2_rv;\n"
+      "\t\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\tif (!cdh_b2_slen &&\n"
+      "\t\t\t\t\t\t    cdh_bridge_cache_get(cdh_b2_shbuf, &cdh_b2_slen,\n"
+      "\t\t\t\t\t\t\t\t\t (u32)current->tgid) &&\n"
+      "\t\t\t\t\t\t    atomic_inc_return(&cdh_b2_probe) <= 16)\n"
+      "\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
+      "\t\t\t\t\t\t\t\t \"cdh-mali: B2 bridge shader cache-hit jc=0x%llx len=%u\\n\",\n"
+      "\t\t\t\t\t\t\t\t cdh_real_jc, cdh_b2_slen);\n"
+      "\t\t\t\t\t\tif (cdh_b2_slen) {\n"
+      "\t\t\t\t\t\t\tstruct cdh_bridge_req cdh_b2_req = { 0 };\n"
+      "\t\t\t\t\t\t\tu32 cdh_b2_seqv;\n"
+      "\n"
+      "\t\t\t\t\t\t\tcdh_b2_seqv = (u32)atomic_inc_return(&cdh_b2_seq);\n"
+      "\t\t\t\t\t\t\tif (!cdh_b2_seqv)\n"
+      "\t\t\t\t\t\t\t\tcdh_b2_seqv = (u32)atomic_inc_return(&cdh_b2_seq);\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.seq = cdh_b2_seqv;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.rt_base = cdh_base;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.w = cdh_w;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.h = cdh_h;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.row_stride = cdh_rows;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.surf_stride = cdh_surf;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.blk = cdh_blk;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.flags = (cdh_w2 & 0x4) ?\n"
+      "\t\t\t\t\t\t\t\tCDH_BRIDGE_FLAG_WIDE_SB : 0;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.shader = cdh_b2_shbuf;\n"
+      "\t\t\t\t\t\t\tcdh_b2_req.shader_len = cdh_b2_slen;\n"
+      "\t\t\t\t\t\t\tif (!cdh_bridge_submit(&cdh_b2_req)) {\n"
+      "\t\t\t\t\t\t\t\t/* 入队成功：登记 pending hold，激活认领时\n"
+      "\t\t\t\t\t\t\t\t * 完成时刻推到 now+500ms 兜底 */\n"
+      "\t\t\t\t\t\t\t\tcdh_bridge_hold(cdh_b2_seqv, cdh_real_jc,\n"
+      "\t\t\t\t\t\t\t\t\t\tktime_get_ns() + 3000000000ULL);\n"
+      "\t\t\t\t\t\t\t} else if (atomic_inc_return(&cdh_b2_probe) <= 16) {\n"
+      "\t\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
+      "\t\t\t\t\t\t\t\t\t \"cdh-mali: B2 bridge skip seq=%u jc=0x%llx submit err\\n\",\n"
+      "\t\t\t\t\t\t\t\t\t cdh_b2_seqv, cdh_real_jc);\n"
+      "\t\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t\t} else if (atomic_inc_return(&cdh_b2_probe) <= 16) {\n"
+      "\t\t\t\t\t\t\tdev_info(kbdev->dev,\n"
+      "\t\t\t\t\t\t\t\t \"cdh-mali: B2 bridge skip jc=0x%llx rt=0x%llx no fragment shader\\n\",\n"
+      "\t\t\t\t\t\t\t\t cdh_real_jc, cdh_base);\n"
+      "\t\t\t\t\t\t}\n"
+      "\t\t\t\t\t} while (0);\n"
+      "\t\t\t\t}\n"
+      "cdh_next_job:\n",
+      "B2 桥 FS atom 提交桥接（v77 (28h)）",
+      done="cdh-mali: B2 bridge shader jc=0x%llx")
+
+# (28j) mali_kbase_jd.c：Tiler atom stage-2 shader 捕获进缓存。
+#      (19) 注释定案：fragment shader 落 Tiler Job 的 DCD（job 缓冲
+#      +0xe8 处直指 Shader Program），FS atom 为单 type=9 job 链、链上
+#      追不到 → Tiler atom 提交时捕获（同 tgid、2s 有效），FS 周转取用。
+patch("drivers/gpu/arm/midgard/mali_kbase_jd.c",
+      "\t\tuser_addr = (void __user *)((uintptr_t)user_addr + stride);\n",
+      "\t\t/* CDH(gold-15): B2 桥 Tiler atom stage-2 shader 捕获\n"
+      "\t\t * （wire-kbase.sh (28j)）——见上方 (28h-c) 注释：fragment\n"
+      "\t\t * shader 落 Tiler Job 的 DCD，此处捕获进缓存供 FS 周转取用。 */\n"
+      "\t\tif ((cdh_real_req & 0x2) && cdh_real_jc) {\n"
+      "\t\t\tstatic u8 cdh_b2_tjob[384];\n"
+      "\t\t\tstatic u8 cdh_b2_tbuf[4096];\n"
+      "\t\t\tstatic atomic_t cdh_b2_tprobe = ATOMIC_INIT(0);\n"
+      "\t\t\tu64 cdh_b2_tj = cdh_real_jc;\n"
+      "\t\t\tu32 cdh_b2_tn;\n"
+      "\n"
+      "\t\t\tfor (cdh_b2_tn = 0; cdh_b2_tn < 8 && cdh_b2_tj;\n"
+      "\t\t\t     cdh_b2_tn++) {\n"
+      "\t\t\t\tu64 cdh_b2_tnext = 0;\n"
+      "\t\t\t\tu32 cdh_b2_tw;\n"
+      "\n"
+      "\t\t\t\tif (copy_from_user(cdh_b2_tjob,\n"
+      "\t\t\t\t\t\t   u64_to_user_ptr(cdh_b2_tj),\n"
+      "\t\t\t\t\t\t   sizeof(cdh_b2_tjob)))\n"
+      "\t\t\t\t\tbreak;\n"
+      "\t\t\t\tmemcpy(&cdh_b2_tnext, cdh_b2_tjob + 0x18, 8);\n"
+      "\t\t\t\tfor (cdh_b2_tw = 0;\n"
+      "\t\t\t\t     cdh_b2_tw + 8 <= sizeof(cdh_b2_tjob);\n"
+      "\t\t\t\t     cdh_b2_tw += 8) {\n"
+      "\t\t\t\t\tu64 cdh_b2_tv = 0;\n"
+      "\t\t\t\t\tu32 cdh_b2_tlen = 0;\n"
+      "\n"
+      "\t\t\t\t\tmemcpy(&cdh_b2_tv, cdh_b2_tjob + cdh_b2_tw, 8);\n"
+      "\t\t\t\t\tif (!cdh_b2_extract_at(kctx, cdh_b2_tv,\n"
+      "\t\t\t\t\t\t\t  cdh_b2_tbuf, &cdh_b2_tlen))\n"
+      "\t\t\t\t\t\tcontinue;\n"
+      "\t\t\t\t\tcdh_bridge_cache_put(cdh_b2_tbuf, cdh_b2_tlen,\n"
+      "\t\t\t\t\t\t\t (u32)current->tgid);\n"
+      "\t\t\t\t\tif (atomic_inc_return(&cdh_b2_tprobe) <= 8)\n"
+      "\t\t\t\t\t\tdev_info(kbdev->dev,\n"
+      "\t\t\t\t\t\t\t \"cdh-mali: B2 bridge cache-put jc=0x%llx off=+0x%x len=%u\\n\",\n"
+      "\t\t\t\t\t\t\t cdh_b2_tj, cdh_b2_tw, cdh_b2_tlen);\n"
+      "\t\t\t\t\tbreak;\n"
+      "\t\t\t\t}\n"
+      "\t\t\t\tcdh_b2_tj = cdh_b2_tnext;\n"
+      "\t\t\t}\n"
+      "\t\t}\n"
+      "\t\tuser_addr = (void __user *)((uintptr_t)user_addr + stride);\n",
+      "B2 桥 Tiler atom stage-2 shader 捕获（v78 (28j)）",
+      done="cdh-mali: B2 bridge cache-put jc=0x%llx")
+
+# v85 (29a) AtomicCommit 分段计时探针：量化「AtomicCommit 慢」当前是否仍在。
+# 背景：solution.md vendor-gpu §15.3 记「AtomicCommit 慢（10s 级）」是 v62 时期
+# 病灶；v72 已修通 flip 链（flip_done 超时归零）。run123 实测已无 flip_done
+# timed out，但 GPU 提交恒停 ~39s + mali-cmar-backe 用户态自旋（§22.3 DDK
+# 死锁定性）→ 需实测 commit 各段耗时，判「慢」是否已消失、慢在哪段。
+# 限 24 条、total>200ms 才打（区分常态与慢，防刷屏）。
+patch("drivers/gpu/drm/drm_atomic_helper.c",
+      "\tdrm_atomic_helper_commit_modeset_disables(dev, old_state);\n"
+      "\n"
+      "\tdrm_atomic_helper_commit_planes(dev, old_state, 0);\n"
+      "\n"
+      "\tdrm_atomic_helper_commit_modeset_enables(dev, old_state);\n"
+      "\n"
+      "\tdrm_atomic_helper_fake_vblank(old_state);\n"
+      "\n"
+      "\tdrm_atomic_helper_commit_hw_done(old_state);\n"
+      "\n"
+      "\tdrm_atomic_helper_wait_for_vblanks(dev, old_state);\n"
+      "\n"
+      "\tdrm_atomic_helper_cleanup_planes(dev, old_state);\n"
+      "}\n",
+      "\t/* CDH(gold-15): AtomicCommit 分段计时（v85 (29a)）：限 24 条、>200ms 打 */\n"
+      "\t{\n"
+      "\t\tstatic int cdh_commit_log, cdh_commit_cnt;\n"
+      "\t\tstatic long long cdh_commit_max;\n"
+      "\t\tktime_t t0 = ktime_get(), t1, t2, t3, t4;\n"
+      "\n"
+      "\t\tdrm_atomic_helper_commit_modeset_disables(dev, old_state);\n"
+      "\n"
+      "\t\tt1 = ktime_get();\n"
+      "\t\tdrm_atomic_helper_commit_planes(dev, old_state, 0);\n"
+      "\n"
+      "\t\tdrm_atomic_helper_commit_modeset_enables(dev, old_state);\n"
+      "\n"
+      "\t\tdrm_atomic_helper_fake_vblank(old_state);\n"
+      "\n"
+      "\t\tdrm_atomic_helper_commit_hw_done(old_state);\n"
+      "\n"
+      "\t\tt2 = ktime_get();\n"
+      "\t\tdrm_atomic_helper_wait_for_vblanks(dev, old_state);\n"
+      "\n"
+      "\t\tt3 = ktime_get();\n"
+      "\t\tdrm_atomic_helper_cleanup_planes(dev, old_state);\n"
+      "\t\tt4 = ktime_get();\n"
+      "\t\tif (cdh_commit_log < 24 && ktime_ms_delta(t4, t0) > 200) {\n"
+      "\t\t\tcdh_commit_log++;\n"
+      "\t\t\tpr_info(\"cdh_commit: total=%lldms disables=%lld planes=%lld vblanks=%lld cleanup=%lld\\n\",\n"
+      "\t\t\t\tktime_ms_delta(t4, t0), ktime_ms_delta(t1, t0),\n"
+      "\t\t\t\tktime_ms_delta(t2, t1), ktime_ms_delta(t3, t2),\n"
+      "\t\t\t\tktime_ms_delta(t4, t3));\n"
+      "\t\t}\n"
+      "\t\t/* v87 (29c)：无歧义量化——首条立即打 + 每 10 条汇总。\n"
+      "\t\t * v86 的 %50 有盲区：commit<50 次时「没跑」与「跑了都快」分不开。 */\n"
+      "\t\t{\n"
+      "\t\t\tlong long mt = ktime_ms_delta(t4, t0);\n"
+      "\n"
+      "\t\t\tcdh_commit_cnt++;\n"
+      "\t\t\tif (mt > cdh_commit_max)\n"
+      "\t\t\t\tcdh_commit_max = mt;\n"
+      "\t\t\tif (cdh_commit_cnt == 1 || (cdh_commit_cnt % 10) == 0)\n"
+      "\t\t\t\tpr_info(\"cdh_commit: agg count=%d max_total=%lldms last=%lldms disables=%lld planes=%lld vblanks=%lld cleanup=%lld\\n\",\n"
+      "\t\t\t\t\tcdh_commit_cnt, cdh_commit_max, mt,\n"
+      "\t\t\t\t\tktime_ms_delta(t1, t0), ktime_ms_delta(t2, t1),\n"
+      "\t\t\t\t\tktime_ms_delta(t3, t2), ktime_ms_delta(t4, t3));\n"
+      "\t\t}\n"
+      "\t}\n"
+      "}\n",
+      "AtomicCommit 分段计时探针（v85 (29a)，v87 (29c) agg 无歧义化）",
+      done="cdh_commit: agg count=%d max_total=%lldms last=%lldms disables=")
+
+
 PY
 
 # 7) Phase C·第八补丁接线：/proc/ged stub 源文件就位（每次覆盖，便于宿主侧迭代）。
@@ -2500,6 +3092,17 @@ PY
 cp -a kernel/modules/mali_vgpu/ged-stub/ged_stub.c drivers/dma-buf/ged_stub.c
 if ! grep -qxF 'obj-y += ged_stub.o' drivers/dma-buf/Makefile; then
 	echo 'obj-y += ged_stub.o' >> drivers/dma-buf/Makefile
+fi
+
+# 8) (28i) B2 渲染桥 mailbox 驱动就位（每次覆盖，便于宿主侧迭代）。
+#    ABI 与职责见 bridge/cdh_gpumbox.h 头注释；与 ged-stub 同法接线
+#    （drivers/dma-buf/ obj-y 编进内核，EXPORT_SYMBOL_GPL 供 mali_kbase.ko
+#    的 (28a-h) 胶水调用）。头文件拷进 include/linux/ 供 <linux/cdh_gpumbox.h>
+#    引用（kbase 三个胶水文件同用）。
+cp -a kernel/modules/mali_vgpu/bridge/cdh_gpumbox.c drivers/dma-buf/cdh_gpumbox.c
+cp -a kernel/modules/mali_vgpu/bridge/cdh_gpumbox.h include/linux/cdh_gpumbox.h
+if ! grep -qxF 'obj-y += cdh_gpumbox.o' drivers/dma-buf/Makefile; then
+	echo 'obj-y += cdh_gpumbox.o' >> drivers/dma-buf/Makefile
 fi
 
 echo "[wire-kbase] in-tree 接线完成（drivers/gpu/arm + Kconfig/Makefile + ccflags 适配）"

@@ -110,115 +110,44 @@ int cdh_bridge_register_ops(const struct cdh_bridge_ops *ops)
 }
 EXPORT_SYMBOL_GPL(cdh_bridge_register_ops);
 
-__maybe_unused static int cdh_write_user(struct mm_struct *mm, u64 uaddr, const u8 *src, u32 len);
-
 /*
- * CDH(gold-15): 真实画面直通合成（方案 A）。
- * 当拦截到 104B（SurfaceFlinger 图层合成着色器）或 32B（2D 纹理 Blit），
- * 且解析出合法 src_base、rt_base 均为线性 blk=2 RGBA 面时：
- * 在当前进程上下文（SurfaceFlinger）直接逐行读取源图层像素并进行预乘 Alpha 混合写回目标。
- * 耗时 < 1ms，原生输出 1080x2400 高清画面，不产生 hvc11 流量，绝不被 wallpaper_tex 覆写。
- * 成功返回 1；跳过或失败返回 0（走原异步渲染通道）。
+ * 源纹理降采样（GR02 真实纹理数据面）：在提交进程上下文（current->mm 即
+ * 图层/纹理所属进程，SAME_VA）按最近邻把 kbase 侧解析出的源纹理
+ * （Generic+Linear Plane，(28k) cdh_b2_extract_res）采样成
+ * CDH_BRIDGE_IMG_W x CDH_BRIDGE_IMG_H RGBA8，随请求送 host，harness 绑定为
+ * binding 3 供 Valhall shader 的 TEX 指令采样——替代此前 host 端硬编码测试纹理。
+ * 返回 1=采样成功；源参数非法/读失败返回 0（请求不带纹理，host 走无纹理路径）。
  */
-static int cdh_direct_compose(const struct cdh_bridge_req *r)
+static int cdh_sample_src(const struct cdh_bridge_req *r, u8 *out)
 {
-	struct mm_struct *mm = current->mm;
-	u32 w, h, src_w, src_h, row_stride, src_stride;
-	u64 rt_base, src_base;
-	u32 dst_y_offset = 0;
-	u8 *src_row = NULL;
-	u8 *dst_row = NULL;
-	u32 y, x;
+	u8 *row;
+	u32 x, y, rowlen;
 
-	if (!r || !mm)
+	if (!r->src_base || !r->src_w || !r->src_h || r->src_w > 0x4000 ||
+	    r->src_h > 0x4000 || r->src_stride < r->src_w * 4 ||
+	    r->src_stride > 0x10000)
 		return 0;
-	rt_base = r->rt_base;
-	src_base = r->src_base;
-	w = r->w;
-	h = r->h;
-	row_stride = r->row_stride;
-	src_w = r->src_w;
-	src_h = r->src_h;
-	src_stride = r->src_stride;
-
-	/* 仅针对 blk=2 (Linear) 的有效源和目标执行内核直通合成 */
-	if (r->blk != 2 || !src_base || !rt_base)
+	rowlen = r->src_w * 4;
+	row = kmalloc(rowlen, GFP_KERNEL);
+	if (!row)
 		return 0;
-	if (!w || w > 0x4000 || !h || h > 0x4000 || !row_stride || row_stride > 0x10000)
-		return 0;
-	if (!src_w || src_w > 0x4000 || !src_h || src_h > 0x4000 || !src_stride || src_stride > 0x10000)
-		return 0;
+	for (y = 0; y < CDH_BRIDGE_IMG_H; y++) {
+		u32 sy = (u32)(((u64)y * 2 + 1) * r->src_h / (2 * CDH_BRIDGE_IMG_H));
 
-	/* 几何门控：只直通「整宽图层」——源宽≈目标宽（容忍 1080/1088 stride
-	 * 对齐差），且源高=目标高（全屏层：壁纸/桌面）或为状态栏/导航栏高度。
-	 * 图标、字形 atlas 等小纹理是 HWUI 多 draw 的一部分，按左上角整块拷贝
-	 * 必然错图，一律回落原路径。 */
-	if (src_w + 16 < w || src_w > w + 16 ||
-	    (src_h != h && !(src_h <= 150 && h > src_h))) {
-		pr_info_ratelimited("cdh-mali: B2 direct skip geom rt=%ux%u src=%ux%u\n",
-				    w, h, src_w, src_h);
-		return 0;
-	}
-
-	/* 针对状态栏与导航栏根据高度匹配目标 Y 偏移 */
-	if (src_h <= 120 && h > src_h) {
-		/* StatusBar: 顶部 (y=0) */
-		dst_y_offset = 0;
-	} else if (src_h <= 150 && h > src_h) {
-		/* NavigationBar: 底部 (y=h - src_h, 如 2400-130=2270) */
-		dst_y_offset = h - src_h;
-	} else {
-		/* 全屏图层 (Wallpaper, Launcher): 从顶部开始 */
-		dst_y_offset = 0;
-	}
-
-	src_row = kmalloc(src_stride, GFP_KERNEL);
-	dst_row = kmalloc(row_stride, GFP_KERNEL);
-	if (!src_row || !dst_row) {
-		kfree(src_row);
-		kfree(dst_row);
-		return 0;
-	}
-
-	for (y = 0; y < src_h && (y + dst_y_offset) < h; y++) {
-		u64 s_uaddr = src_base + (u64)y * src_stride;
-		u64 d_uaddr = rt_base + (u64)(y + dst_y_offset) * row_stride;
-		u32 copy_len = min(min(w, src_w) * 4, min(row_stride, src_stride));
-
-		if (copy_from_user(src_row, u64_to_user_ptr(s_uaddr), copy_len))
-			break;
-
-		if (copy_from_user(dst_row, u64_to_user_ptr(d_uaddr), copy_len)) {
-			memcpy(dst_row, src_row, copy_len);
-		} else {
-			u32 px_count = copy_len / 4;
-			for (x = 0; x < px_count; x++) {
-				u8 *sp = src_row + x * 4;
-				u8 *dp = dst_row + x * 4;
-				u8 sa = sp[3];
-
-				if (sa == 255) {
-					dp[0] = sp[0];
-					dp[1] = sp[1];
-					dp[2] = sp[2];
-					dp[3] = 255;
-				} else if (sa > 0) {
-					u32 inv = 255 - sa;
-					dp[0] = sp[0] + (dp[0] * inv + 127) / 255;
-					dp[1] = sp[1] + (dp[1] * inv + 127) / 255;
-					dp[2] = sp[2] + (dp[2] * inv + 127) / 255;
-					dp[3] = sa + (dp[3] * inv + 127) / 255;
-				}
-			}
+		if (copy_from_user(row, u64_to_user_ptr(r->src_base +
+						       (u64)sy * r->src_stride),
+				   rowlen)) {
+			kfree(row);
+			return 0;
 		}
+		for (x = 0; x < CDH_BRIDGE_IMG_W; x++) {
+			u32 sx = (u32)(((u64)x * 2 + 1) * r->src_w /
+				       (2 * CDH_BRIDGE_IMG_W));
 
-		if (copy_to_user(u64_to_user_ptr(d_uaddr), dst_row, copy_len)) {
-			cdh_write_user(mm, d_uaddr, dst_row, copy_len);
+			memcpy(out + (y * CDH_BRIDGE_IMG_W + x) * 4, row + sx * 4, 4);
 		}
 	}
-
-	kfree(src_row);
-	kfree(dst_row);
+	kfree(row);
 	return 1;
 }
 
@@ -226,26 +155,13 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 {
 	struct cdh_bridge_ent *e = NULL;
 	u8 *rec;
-	u32 payload_len, rec_len, shader_len;
+	u8 *tex = NULL;
+	u32 payload_len, rec_len, shader_len, hdr_len, tex_len = 0;
 	int i, ret = 0;
 
 	if (!r || !current->mm)
 		return -EINVAL;
 
-	/* 优化通道：若具备有效源纹理且为全屏/图层合成（带 src_base 的线性合成），
-	 * 直接在内核执行直通混合合成，单帧 <1ms 原生 1080x2400 出画，无需 hvc11 慢速转发 */
-	if (r->src_base && r->blk != 2)
-		pr_info_ratelimited("cdh-mali: B2 direct skip rt blk=%u (non-linear) rt=%ux%u src=0x%llx %ux%u\n",
-				    r->blk, r->w, r->h, (unsigned long long)r->src_base,
-				    r->src_w, r->src_h);
-	if (r->src_base && r->blk == 2) {
-		if (cdh_direct_compose(r)) {
-			pr_info("B2 direct compose ok seq=%u rt=0x%llx src=0x%llx %ux%u shader=%uB\n",
-				r->seq, (unsigned long long)r->rt_base,
-				(unsigned long long)r->src_base, r->src_w, r->src_h, r->shader_len);
-			return 1;
-		}
-	}
 	/* shader 有界（(19) 的 vmap 上限 4KB，这里放宽到 64KB 防呆） */
 	shader_len = r->shader_len;
 	if (shader_len > CDH_BRIDGE_SHADER_MAX)
@@ -253,15 +169,28 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 	if (shader_len && !r->shader)
 		return -EINVAL;
 
-	payload_len = CDH_BRIDGE_REQ_HDR_LEN + shader_len;
+	/* 有源纹理 → GR02（带降采样纹理）；否则 GR01（与旧 host 兼容） */
+	if (r->src_base) {
+		tex = kvmalloc(CDH_BRIDGE_PIX_LEN, GFP_KERNEL);
+		if (tex && cdh_sample_src(r, tex)) {
+			tex_len = CDH_BRIDGE_PIX_LEN;
+		} else {
+			kvfree(tex);
+			tex = NULL;
+		}
+	}
+	hdr_len = tex_len ? CDH_BRIDGE_REQ2_HDR_LEN : CDH_BRIDGE_REQ_HDR_LEN;
+	payload_len = hdr_len + shader_len + tex_len;
 	rec_len = 4 + payload_len;
-	rec = kmalloc(rec_len, GFP_KERNEL);
-	if (!rec)
+	rec = kvmalloc(rec_len, GFP_KERNEL);
+	if (!rec) {
+		kvfree(tex);
 		return -ENOMEM;
+	}
 
-	/* [u32 len][GR01 payload]，字段全 BE */
+	/* [u32 len][GR01|GR02 payload]，字段全 BE */
 	put_be32(rec, payload_len);
-	memcpy(rec + 4, "GR01", 4);
+	memcpy(rec + 4, tex_len ? "GR02" : "GR01", 4);
 	put_be32(rec + 8, r->seq);
 	put_be64(rec + 12, r->rt_base);
 	put_be32(rec + 20, r->w);
@@ -271,8 +200,16 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 	put_be32(rec + 36, r->blk);
 	put_be32(rec + 40, r->flags);
 	put_be32(rec + 44, shader_len);
+	if (tex_len) {
+		put_be32(rec + 48, CDH_BRIDGE_IMG_W);
+		put_be32(rec + 52, CDH_BRIDGE_IMG_H);
+		put_be32(rec + 56, tex_len);
+	}
 	if (shader_len)
-		memcpy(rec + 48, r->shader, shader_len);
+		memcpy(rec + 4 + hdr_len, r->shader, shader_len);
+	if (tex_len)
+		memcpy(rec + 4 + hdr_len + shader_len, tex, tex_len);
+	kvfree(tex);
 
 	mutex_lock(&cdh_bridge_lock);
 	for (i = 0; i < CDH_BRIDGE_RING_N; i++) {
@@ -283,7 +220,7 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 	}
 	if (!e) {
 		mutex_unlock(&cdh_bridge_lock);
-		kfree(rec);
+		kvfree(rec);
 		return -ENOSPC;
 	}
 
@@ -307,9 +244,10 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 	mutex_unlock(&cdh_bridge_lock);
 
 	wake_up_interruptible(&cdh_bridge_wq);
-	pr_info("B2 bridge q seq=%u rt=0x%llx %ux%u blk=%u shader=%uB\n",
+	pr_info("B2 bridge q seq=%u rt=0x%llx %ux%u blk=%u shader=%uB tex=%s src=0x%llx %ux%u\n",
 		r->seq, (unsigned long long)r->rt_base, r->w, r->h,
-		r->blk, shader_len);
+		r->blk, shader_len, tex_len ? "real" : "none",
+		(unsigned long long)r->src_base, r->src_w, r->src_h);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(cdh_bridge_submit);
@@ -584,7 +522,7 @@ static void cdh_reclaim(u32 seq, u8 *rec, struct mm_struct *mm)
 		ops->release(seq);
 	if (mm)
 		mmput(mm);
-	kfree(rec);
+	kvfree(rec);
 }
 
 /* 超时扫描：到期请求放行 job（兜底图层=(16d) 填色，不动）并回收 */
@@ -673,7 +611,7 @@ static ssize_t cdh_bridge_read(struct file *filp, char __user *ubuf,
 					rec_len);
 				ret = -EFAULT;
 			}
-			kfree(rec);
+			kvfree(rec);
 			return ret;
 		}
 

@@ -26,6 +26,16 @@
  *   u32 shader_len
  *   u8  shader[shader_len]（Fragment shader 机器码）
  *
+ * GR02 payload（内核→helper，带真实源纹理，56B 头 + shader + 纹理）：
+ *   GR01 的 44B 头（magic="GR02"，字段/偏移完全相同）后追加：
+ *   u32 tex_w, tex_h   （降采样纹理尺寸，恒 CDH_BRIDGE_IMG_W x IMG_H）
+ *   u32 tex_len        （= tex_w * tex_h * 4）
+ *   u8  shader[shader_len]
+ *   u8  tex[tex_len]   （RGBA8 行主序：kbase (28k) 从 Valhall Texture→
+ *                       Plane 描述符解析出的源纹理，在提交进程上下文最近邻
+ *                       降采样；host harness 绑定为 binding 3 供 TEX 采样）
+ *   无可用源纹理时仍发 GR01（host 走无纹理路径），不伪造纹理。
+ *
  * RP01 payload（helper→内核，24B 头 + 像素）：
  *   u8  magic[4] = "RP01"
  *   u32 seq            （必须与请求 seq 一致）
@@ -41,6 +51,7 @@
 
 /* GR01/RP01 头长度（不含 shader/像素载荷） */
 #define CDH_BRIDGE_REQ_HDR_LEN  44u
+#define CDH_BRIDGE_REQ2_HDR_LEN 56u
 #define CDH_BRIDGE_RESP_HDR_LEN 24u
 
 /* 响应图尺寸（host 渲染分辨率，内核最近邻缩放到 RT） */
@@ -79,7 +90,8 @@ struct cdh_bridge_ops {
 /* 入队 + 唤醒读端。队满返回 -ENOSPC（环容量 CDH_BRIDGE_RING_N）；
  * 提交在 kbase 提交路径（用户进程上下文）调用，内部 mmget(current->mm)
  * 供后续写回使用，write()/超时时 mmput。
- * 返回值：0=入队成功（走异步 host 渲染），1=直通合成完成（无需 hold/释放），负值=错误 */
+ * 返回值：0=入队成功（host 渲染后经 RP01 写回），负值=错误。
+ * 有 src_base 时附带降采样真实纹理（GR02）。 */
 int cdh_bridge_submit(const struct cdh_bridge_req *r);
 
 /* kbase 模块 init 注册放行回调；传 NULL 注销。 */

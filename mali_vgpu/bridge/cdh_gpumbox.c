@@ -153,10 +153,12 @@ static int cdh_direct_compose(const struct cdh_bridge_req *r)
 	 * 对齐差），且源高=目标高（全屏层：壁纸/桌面）或为状态栏/导航栏高度。
 	 * 图标、字形 atlas 等小纹理是 HWUI 多 draw 的一部分，按左上角整块拷贝
 	 * 必然错图，一律回落原路径。 */
-	if (src_w + 16 < w || src_w > w + 16)
+	if (src_w + 16 < w || src_w > w + 16 ||
+	    (src_h != h && !(src_h <= 150 && h > src_h))) {
+		pr_info_ratelimited("cdh-mali: B2 direct skip geom rt=%ux%u src=%ux%u\n",
+				    w, h, src_w, src_h);
 		return 0;
-	if (src_h != h && !(src_h <= 150 && h > src_h))
-		return 0;
+	}
 
 	/* 针对状态栏与导航栏根据高度匹配目标 Y 偏移 */
 	if (src_h <= 120 && h > src_h) {
@@ -232,6 +234,10 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 
 	/* 优化通道：若具备有效源纹理且为全屏/图层合成（带 src_base 的线性合成），
 	 * 直接在内核执行直通混合合成，单帧 <1ms 原生 1080x2400 出画，无需 hvc11 慢速转发 */
+	if (r->src_base && r->blk != 2)
+		pr_info_ratelimited("cdh-mali: B2 direct skip rt blk=%u (non-linear) rt=%ux%u src=0x%llx %ux%u\n",
+				    r->blk, r->w, r->h, (unsigned long long)r->src_base,
+				    r->src_w, r->src_h);
 	if (r->src_base && r->blk == 2) {
 		if (cdh_direct_compose(r)) {
 			pr_info("B2 direct compose ok seq=%u rt=0x%llx src=0x%llx %ux%u shader=%uB\n",

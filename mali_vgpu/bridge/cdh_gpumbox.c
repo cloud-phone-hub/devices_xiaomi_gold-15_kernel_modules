@@ -111,51 +111,17 @@ int cdh_bridge_register_ops(const struct cdh_bridge_ops *ops)
 EXPORT_SYMBOL_GPL(cdh_bridge_register_ops);
 
 /*
- * 源纹理降采样（GR02 真实纹理数据面）：在提交进程上下文（current->mm 即
- * 图层/纹理所属进程，SAME_VA）按最近邻把 kbase 侧解析出的源纹理
- * （Generic+Linear Plane，(28k) cdh_b2_extract_res）采样成
- * CDH_BRIDGE_IMG_W x CDH_BRIDGE_IMG_H RGBA8，随请求送 host，harness 绑定为
- * binding 3 供 Valhall shader 的 TEX 指令采样——替代此前 host 端硬编码测试纹理。
- * 返回 1=采样成功；源参数非法/读失败返回 0（请求不带纹理，host 走无纹理路径）。
+ * 源纹理（GR02 真实纹理数据面）：由 kbase 侧 cdh_b2_sample_tex（wire-kbase.sh
+ * (28k)）在提交路径经 kctx 区域物理页最近邻采样成
+ * CDH_BRIDGE_IMG_W x CDH_BRIDGE_IMG_H 逻辑 RGBA8（已按 Texture.Format/Swizzle
+ * 换序）后经 r->tex 传入。此前在这里 copy_from_user 读用户 VA，对 dma-buf
+ * 导入的合成源图层恒失败（v112 实测），已移除。
  */
-static int cdh_sample_src(const struct cdh_bridge_req *r, u8 *out)
-{
-	u8 *row;
-	u32 x, y, rowlen;
-
-	if (!r->src_base || !r->src_w || !r->src_h || r->src_w > 0x4000 ||
-	    r->src_h > 0x4000 || r->src_stride < r->src_w * 4 ||
-	    r->src_stride > 0x10000)
-		return 0;
-	rowlen = r->src_w * 4;
-	row = kmalloc(rowlen, GFP_KERNEL);
-	if (!row)
-		return 0;
-	for (y = 0; y < CDH_BRIDGE_IMG_H; y++) {
-		u32 sy = (u32)(((u64)y * 2 + 1) * r->src_h / (2 * CDH_BRIDGE_IMG_H));
-
-		if (copy_from_user(row, u64_to_user_ptr(r->src_base +
-						       (u64)sy * r->src_stride),
-				   rowlen)) {
-			kfree(row);
-			return 0;
-		}
-		for (x = 0; x < CDH_BRIDGE_IMG_W; x++) {
-			u32 sx = (u32)(((u64)x * 2 + 1) * r->src_w /
-				       (2 * CDH_BRIDGE_IMG_W));
-
-			memcpy(out + (y * CDH_BRIDGE_IMG_W + x) * 4, row + sx * 4, 4);
-		}
-	}
-	kfree(row);
-	return 1;
-}
 
 int cdh_bridge_submit(const struct cdh_bridge_req *r)
 {
 	struct cdh_bridge_ent *e = NULL;
 	u8 *rec;
-	u8 *tex = NULL;
 	u32 payload_len, rec_len, shader_len, hdr_len, tex_len = 0;
 	int i, ret = 0;
 
@@ -169,24 +135,15 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 	if (shader_len && !r->shader)
 		return -EINVAL;
 
-	/* 有源纹理 → GR02（带降采样纹理）；否则 GR01（与旧 host 兼容） */
-	if (r->src_base) {
-		tex = kvmalloc(CDH_BRIDGE_PIX_LEN, GFP_KERNEL);
-		if (tex && cdh_sample_src(r, tex)) {
-			tex_len = CDH_BRIDGE_PIX_LEN;
-		} else {
-			kvfree(tex);
-			tex = NULL;
-		}
-	}
+	/* 有 kbase 采好的源纹理 → GR02；否则 GR01（与旧 host 兼容） */
+	if (r->tex)
+		tex_len = CDH_BRIDGE_PIX_LEN;
 	hdr_len = tex_len ? CDH_BRIDGE_REQ2_HDR_LEN : CDH_BRIDGE_REQ_HDR_LEN;
 	payload_len = hdr_len + shader_len + tex_len;
 	rec_len = 4 + payload_len;
 	rec = kvmalloc(rec_len, GFP_KERNEL);
-	if (!rec) {
-		kvfree(tex);
+	if (!rec)
 		return -ENOMEM;
-	}
 
 	/* [u32 len][GR01|GR02 payload]，字段全 BE */
 	put_be32(rec, payload_len);
@@ -208,8 +165,7 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 	if (shader_len)
 		memcpy(rec + 4 + hdr_len, r->shader, shader_len);
 	if (tex_len)
-		memcpy(rec + 4 + hdr_len + shader_len, tex, tex_len);
-	kvfree(tex);
+		memcpy(rec + 4 + hdr_len + shader_len, r->tex, tex_len);
 
 	mutex_lock(&cdh_bridge_lock);
 	for (i = 0; i < CDH_BRIDGE_RING_N; i++) {
@@ -244,10 +200,10 @@ int cdh_bridge_submit(const struct cdh_bridge_req *r)
 	mutex_unlock(&cdh_bridge_lock);
 
 	wake_up_interruptible(&cdh_bridge_wq);
-	pr_info("B2 bridge q seq=%u rt=0x%llx %ux%u blk=%u shader=%uB tex=%s src=0x%llx %ux%u\n",
+	pr_info("B2 bridge q seq=%u rt=0x%llx %ux%u blk=%u shader=%uB tex=%s src=0x%llx %ux%u fmt=0x%08x\n",
 		r->seq, (unsigned long long)r->rt_base, r->w, r->h,
 		r->blk, shader_len, tex_len ? "real" : "none",
-		(unsigned long long)r->src_base, r->src_w, r->src_h);
+		(unsigned long long)r->src_base, r->src_w, r->src_h, r->src_fmt);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(cdh_bridge_submit);
@@ -741,9 +697,11 @@ static u64 cdh_cache_src_base;
 static u32 cdh_cache_src_w;
 static u32 cdh_cache_src_h;
 static u32 cdh_cache_src_stride;
+static u32 cdh_cache_src_fmt;
 
 void cdh_bridge_cache_put(const u8 *code, u32 len, u32 tgid,
-			  u64 src_base, u32 src_w, u32 src_h, u32 src_stride)
+			  u64 src_base, u32 src_w, u32 src_h, u32 src_stride,
+			  u32 src_fmt)
 {
 	unsigned long flags;
 
@@ -759,13 +717,15 @@ void cdh_bridge_cache_put(const u8 *code, u32 len, u32 tgid,
 	cdh_cache_src_w = src_w;
 	cdh_cache_src_h = src_h;
 	cdh_cache_src_stride = src_stride;
+	cdh_cache_src_fmt = src_fmt;
 	cdh_cache_ns = ktime_get_ns();
 	spin_unlock_irqrestore(&cdh_cache_lock, flags);
 }
 EXPORT_SYMBOL_GPL(cdh_bridge_cache_put);
 
 int cdh_bridge_cache_get(u8 *buf, u32 *len, u32 tgid,
-			 u64 *src_base, u32 *src_w, u32 *src_h, u32 *src_stride)
+			 u64 *src_base, u32 *src_w, u32 *src_h, u32 *src_stride,
+			 u32 *src_fmt)
 {
 	unsigned long flags;
 	int ok = 0;
@@ -783,6 +743,8 @@ int cdh_bridge_cache_get(u8 *buf, u32 *len, u32 tgid,
 			*src_h = cdh_cache_src_h;
 		if (src_stride)
 			*src_stride = cdh_cache_src_stride;
+		if (src_fmt)
+			*src_fmt = cdh_cache_src_fmt;
 		ok = 1;
 	}
 	spin_unlock_irqrestore(&cdh_cache_lock, flags);

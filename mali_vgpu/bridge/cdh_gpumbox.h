@@ -31,7 +31,8 @@
  *   u32 tex_w, tex_h   （降采样纹理尺寸，恒 CDH_BRIDGE_IMG_W x IMG_H）
  *   u32 tex_len        （= tex_w * tex_h * 4）
  *   u8  shader[shader_len]
- *   u8  tex[tex_len]   （RGBA8 行主序：kbase (28k) 从 Valhall Texture→
+ *   u8  tex[tex_len]   （逻辑 RGBA8 行主序：已按 Texture.Format 的 RGB
+ *                       Component Order + Texture.Swizzle 换序；kbase (28k) 从 Valhall Texture→
  *                       Plane 描述符解析出的源纹理，在提交进程上下文最近邻
  *                       降采样；host harness 绑定为 binding 3 供 TEX 采样）
  *   无可用源纹理时仍发 GR01（host 走无纹理路径），不伪造纹理。
@@ -78,6 +79,12 @@ struct cdh_bridge_req {
 	u32 w, h, row_stride, surf_stride, blk, flags;
 	u64 src_base;
 	u32 src_w, src_h, src_stride;
+	/* [0..19]=Texture.Format 低 20 位（[0..11] RGB Component Order，
+	 * [12..19] Mali Format），[20..31]=Texture.Swizzle；0=未知 */
+	u32 src_fmt;
+	/* kbase 侧（持 kctx，可读 IMPORTED_UMM 物理页）已降采样+换序好的
+	 * CDH_BRIDGE_IMG_W x IMG_H 逻辑 RGBA8；NULL=无纹理（发 GR01） */
+	const u8 *tex;
 	const u8 *shader;
 	u32 shader_len;
 };
@@ -100,8 +107,10 @@ int cdh_bridge_register_ops(const struct cdh_bridge_ops *ops);
 /* stage-2 fragment shader 捕获缓存（(28j) Tiler atom 写入 →
  * (28h-c) FS 周转取用）：单条目、同 tgid、2s 内有效。 */
 void cdh_bridge_cache_put(const u8 *code, u32 len, u32 tgid,
-			  u64 src_base, u32 src_w, u32 src_h, u32 src_stride);
+			  u64 src_base, u32 src_w, u32 src_h, u32 src_stride,
+			  u32 src_fmt);
 int cdh_bridge_cache_get(u8 *buf, u32 *len, u32 tgid,
-			 u64 *src_base, u32 *src_w, u32 *src_h, u32 *src_stride);
+			 u64 *src_base, u32 *src_w, u32 *src_h, u32 *src_stride,
+			 u32 *src_fmt);
 
 #endif /* CDH_GPUMBOX_H */

@@ -332,12 +332,114 @@ static void __maybe_unused cdh_afbc_hdr(const u8 *img, u32 w, u32 h, u32 rr, u32
 	hdr[11] = p[3]; /* A */
 }
 
-/* 严禁伪造壁纸/纹理覆写 RenderTarget，必须输出真实 Android SurfaceFlinger 合成帧 */
+/* 把 256x256 RGBA 最近邻缩放写回 RT，返回写入字节数（负值=失败中止） */
 static long cdh_writeback(struct cdh_bridge_ent *e, const u8 *img)
 {
-	(void)e;
-	(void)img;
-	return 0;
+	struct mm_struct *mm = e->mm;
+	u32 w = e->w, h = e->h;
+	long wrote = 0;
+	int ret = 0;
+
+	/* RT 参数防呆（与 (16d) 同口径）：非法参数不写，兜底图层生效 */
+	if (!e->rt_base || !w || w > 0x4000 || !h || h > 0x4000 ||
+	    !e->row_stride || e->row_stride > 0x10000) {
+		pr_info("B2 bridge wb skip seq=%u bad rt 0x%llx %ux%u rows=%u\n",
+			e->seq, (unsigned long long)e->rt_base, w, h,
+			e->row_stride);
+		return 0;
+	}
+
+	if (e->blk == 2) {
+		/* 线性面：逐行 GUP+kmap 写，行址 rt_base + y*row_stride */
+		u32 row_len = w * 4;
+		u8 *row = kmalloc(row_len, GFP_KERNEL);
+		u32 x, y;
+
+		if (!row)
+			return -ENOMEM;
+		for (y = 0; y < h && !ret; y++) {
+			for (x = 0; x < w; x++)
+				memcpy(row + (u64)x * 4,
+				       cdh_src_pixel(img, w, h, x, y), 4);
+			ret = cdh_write_user(mm,
+					     e->rt_base + (u64)y * e->row_stride,
+					     row, row_len);
+			if (!ret)
+				wrote += row_len;
+		}
+		kfree(row);
+	} else if (e->blk == 12 || e->blk == 13) {
+		/* AFBC 面：改写 solid superblock 头（合法纯色压缩面，body 不动）。
+		 * 支持标准 16x16 superblock 与 wide block（32x8）。 */
+		u32 sb_w = (e->flags & CDH_BRIDGE_FLAG_WIDE_SB) ? 32 : 16;
+		u32 sb_h = (e->flags & CDH_BRIDGE_FLAG_WIDE_SB) ? 8 : 16;
+		u32 scols, srows, r, c;
+		u8 hdr[16];
+
+		scols = (w + sb_w - 1) / sb_w;
+		srows = (h + sb_h - 1) / sb_h;
+		if (e->blk == 12) {
+			/* 非平铺：头行主序，行步长=Row Stride */
+			for (r = 0; r < srows && !ret; r++) {
+				for (c = 0; c < scols && !ret; c++) {
+					cdh_afbc_hdr(img, w, h, r, c, sb_w, sb_h, hdr);
+					ret = cdh_write_user(
+						mm,
+						e->rt_base +
+							(u64)r * e->row_stride +
+							(u64)c * 16,
+						hdr, 16);
+					if (!ret)
+						wrote += 16;
+				}
+			}
+		} else {
+			/* 平铺：8x8 SB 为一 tile（tile 头 1024B），tile 行
+			 * 主序、行步长=Row Stride；头在 tb+(j*8+i)*16
+			 * （与 (16d) 完全一致） */
+			u32 txs = (scols + 7) / 8;
+			u32 tys = (srows + 7) / 8;
+			u32 tx, ty, i, j;
+
+			for (ty = 0; ty < tys && !ret; ty++) {
+				for (tx = 0; tx < txs && !ret; tx++) {
+					u64 tb = e->rt_base +
+						 (u64)ty * e->row_stride +
+						 (u64)tx * 1024;
+
+					for (j = 0; j < 8 && !ret; j++) {
+						for (i = 0; i < 8 && !ret; i++) {
+							u32 cc = tx * 8 + i;
+							u32 rr = ty * 8 + j;
+
+							if (cc >= scols ||
+							    rr >= srows)
+								continue;
+							cdh_afbc_hdr(img, w, h,
+								     rr, cc, sb_w, sb_h, hdr);
+							ret = cdh_write_user(
+								mm,
+								tb + (u64)(j * 8 + i) * 16,
+								hdr, 16);
+							if (!ret)
+								wrote += 16;
+						}
+					}
+				}
+			}
+		}
+	} else {
+		/* 其他 blk（0=NoWrite 1=Tiled 等）：不写，只记日志 */
+		pr_info("B2 bridge wb skip seq=%u blk=%u\n", e->seq, e->blk);
+		return 0;
+	}
+
+	if (ret) {
+		pr_info("B2 bridge wb abort seq=%u err=%d wrote=%ldB\n",
+			e->seq, ret, wrote);
+		return ret;
+	}
+	return wrote;
 }
 
 /* ---- 回收：放行 job + 释放 mm/记录（write/超时/退出三路互斥） ---- */

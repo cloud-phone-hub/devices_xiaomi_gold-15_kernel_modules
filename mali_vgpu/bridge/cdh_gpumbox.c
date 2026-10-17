@@ -149,6 +149,15 @@ static int cdh_direct_compose(const struct cdh_bridge_req *r)
 	if (!src_w || src_w > 0x4000 || !src_h || src_h > 0x4000 || !src_stride || src_stride > 0x10000)
 		return 0;
 
+	/* 几何门控：只直通「整宽图层」——源宽≈目标宽（容忍 1080/1088 stride
+	 * 对齐差），且源高=目标高（全屏层：壁纸/桌面）或为状态栏/导航栏高度。
+	 * 图标、字形 atlas 等小纹理是 HWUI 多 draw 的一部分，按左上角整块拷贝
+	 * 必然错图，一律回落原路径。 */
+	if (src_w + 16 < w || src_w > w + 16)
+		return 0;
+	if (src_h != h && !(src_h <= 150 && h > src_h))
+		return 0;
+
 	/* 针对状态栏与导航栏根据高度匹配目标 Y 偏移 */
 	if (src_h <= 120 && h > src_h) {
 		/* StatusBar: 顶部 (y=0) */

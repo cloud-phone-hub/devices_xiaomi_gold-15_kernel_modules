@@ -65,6 +65,8 @@ struct cdh_bridge_req {
 	u32 seq;
 	u64 rt_base;
 	u32 w, h, row_stride, surf_stride, blk, flags;
+	u64 src_base;
+	u32 src_w, src_h, src_stride;
 	const u8 *shader;
 	u32 shader_len;
 };
@@ -76,7 +78,8 @@ struct cdh_bridge_ops {
 
 /* 入队 + 唤醒读端。队满返回 -ENOSPC（环容量 CDH_BRIDGE_RING_N）；
  * 提交在 kbase 提交路径（用户进程上下文）调用，内部 mmget(current->mm)
- * 供后续写回使用，write()/超时时 mmput。 */
+ * 供后续写回使用，write()/超时时 mmput。
+ * 返回值：0=入队成功（走异步 host 渲染），1=直通合成完成（无需 hold/释放），负值=错误 */
 int cdh_bridge_submit(const struct cdh_bridge_req *r);
 
 /* kbase 模块 init 注册放行回调；传 NULL 注销。 */
@@ -84,7 +87,9 @@ int cdh_bridge_register_ops(const struct cdh_bridge_ops *ops);
 
 /* stage-2 fragment shader 捕获缓存（(28j) Tiler atom 写入 →
  * (28h-c) FS 周转取用）：单条目、同 tgid、2s 内有效。 */
-void cdh_bridge_cache_put(const u8 *code, u32 len, u32 tgid);
-int cdh_bridge_cache_get(u8 *buf, u32 *len, u32 tgid);
+void cdh_bridge_cache_put(const u8 *code, u32 len, u32 tgid,
+			  u64 src_base, u32 src_w, u32 src_h, u32 src_stride);
+int cdh_bridge_cache_get(u8 *buf, u32 *len, u32 tgid,
+			 u64 *src_base, u32 *src_w, u32 *src_h, u32 *src_stride);
 
 #endif /* CDH_GPUMBOX_H */
